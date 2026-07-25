@@ -11,7 +11,7 @@ on:
 env:
   NGROK_AUTH: ${{ secrets.NGROK_AUTH_TOKEN }}
   USER: "Admin"
-  PASS: "VPS@2026!"
+  PASS: "Vps2026Rdp"
 
 jobs:
   start-vps:
@@ -42,9 +42,14 @@ jobs:
       - name: Create Admin User & Enable RDP
         shell: powershell
         run: |
+          # Relax password policy first
+          secedit /export /cfg "$env:TEMP\secpol.cfg" /quiet
+          (Get-Content "$env:TEMP\secpol.cfg") -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | Set-Content "$env:TEMP\secpol.cfg"
+          secedit /configure /db "$env:TEMP\secedit.sdb" /cfg "$env:TEMP\secpol.cfg" /quiet
+
           # Create user with admin privileges
-          $Password = ConvertTo-SecureString "${{ env.PASS }}" -AsPlainText -Force
-          New-LocalUser -Name "${{ env.USER }}" -Password $Password -FullName "VPS Admin" -Description "Remote Desktop User" -PasswordNeverExpires:$true
+          $secPass = ConvertTo-SecureString "${{ env.PASS }}" -AsPlainText -Force
+          New-LocalUser -Name "${{ env.USER }}" -Password $secPass -FullName "VPS Admin" -Description "Remote Desktop User" -PasswordNeverExpires:$true -ErrorAction Stop
           Add-LocalGroupMember -Group "Administrators" -Member "${{ env.USER }}"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "${{ env.USER }}"
 

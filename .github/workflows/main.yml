@@ -86,6 +86,10 @@ on:
         description: "RDP password (min 8 chars, use something strong)"
         required: true
         default: "Atlas-Str0ng-2026!"
+      win11_iso_url:
+        description: "Windows 11 ISO download URL (paste your fresh Microsoft link here — links expire!)"
+        required: false
+        default: "https://software.download.prss.microsoft.com/dbazure/Win11_25H2_English_x64_v2.iso?t=9ce61a6e-0961-4adb-b5da-14ff51066506&P1=1785089598&P2=602&P3=2&P4=ClnX9RbSz6xculiVgxOqh4KP1mYV7xuzWLCe%2bbiDQzmwD%2fZZWAfcMqOmyVKCqgCaVKF5IgB7iQDlxmKUDodteYkikDp%2buwwHy4BKytjsnwMmO0oxK0JCNDlbK635hEAcyvky%2fvHKER1buQLNyfLkCMwcoWDd48ZSZDDF1jQWjNFpyLO8fulwvgfybp0bJ5%2fje8oTDA0kw1vO92BhUVo0pi6l%2fs8TmmK1XiC8WmNLi559P%2f4LsFFYKZmYDkiM%2bPeDSBpiiJ%2fKTqXib93C1cNNHXBYqo%2fGJnCsOzAtjitjtfFRkYRGdrTGZMzjuefBHUsCR8%2fTNKS7nk5UGHXlTt6kfg%3d%3d"
 
 # ── Concurrency guard: only one instance at a time ──
 concurrency:
@@ -608,43 +612,85 @@ jobs:
           qemu-img create -f qcow2 /tmp/win11vm/disk.qcow2 64G
           echo "✅ Disk created"
 
-          # Download Windows 11 Enterprise Evaluation ISO
-          # Using Microsoft's official evaluation center link
-          echo "── Downloading Windows 11 24H2 Evaluation ISO ──"
-          echo "  (This is a ~5.4 GB download, please wait...)"
+          # ── Determine ISO URL ──
+          # Priority: workflow input > repository secret > built-in fallback
+          ISO_URL="${{ github.event.inputs.win11_iso_url }}"
 
-          # Microsoft evaluation ISO direct link (Enterprise LTSC / Eval)
-          # Note: These links may rotate; update as needed
-          WIN11_ISO_URL="https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.2605.241213-1636.ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_en-us.iso"
+          # If the user left the default (empty or placeholder), try secret
+          if [ -z "$ISO_URL" ] || [ "$ISO_URL" = "paste-your-iso-url-here" ]; then
+            if [ -n "${{ secrets.WIN11_ISO_URL }}" ]; then
+              ISO_URL="${{ secrets.WIN11_ISO_URL }}"
+              echo "  Using ISO URL from repository secret WIN11_ISO_URL"
+            fi
+          fi
 
-          # Try to download; if it fails, use UUP dump or alternative
-          wget -q --show-progress "$WIN11_ISO_URL" -O /tmp/win11vm/win11.iso 2>&1 || {
-            echo "⚠️  Primary ISO download failed. Trying alternative..."
-
-            # Alternative: Use a smaller/faster source
-            # Fido script to get official ISO links
-            curl -sL "https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1" -o /tmp/fido.ps1 2>/dev/null || true
-
-            echo "⚠️  Could not auto-download Windows 11 ISO."
-            echo "   Please provide a valid Windows 11 ISO URL as a repository secret:"
-            echo "   WIN11_ISO_URL"
+          if [ -z "$ISO_URL" ]; then
+            echo "❌ No Windows 11 ISO URL provided!"
             echo ""
-            echo "   You can get one from:"
+            echo "   Please provide a valid URL via:"
+            echo "   1. Workflow input 'win11_iso_url' (paste when clicking Run workflow)"
+            echo "   2. Repository secret WIN11_ISO_URL"
+            echo ""
+            echo "   Get a fresh link from:"
             echo "   • https://www.microsoft.com/software-download/windows11"
             echo "   • https://uupdump.net"
             echo ""
+            echo "   ⚠️  Microsoft ISO links expire! Always use a fresh URL."
+            exit 1
+          fi
 
-            # If the user set a secret, use it
-            if [ -n "${{ secrets.WIN11_ISO_URL }}" ]; then
-              wget -q --show-progress "${{ secrets.WIN11_ISO_URL }}" -O /tmp/win11vm/win11.iso
-            else
-              echo "❌ No ISO available. Exiting."
-              exit 1
-            fi
-          }
+          echo "── Downloading Windows 11 ISO ──"
+          echo "  URL: ${ISO_URL:0:80}..."
+          echo "  (This is a ~5-6 GB download, please wait...)"
+          echo ""
 
+          # Use curl with robust settings for large file downloads:
+          #   -L          : follow redirects (Microsoft uses 302 redirects)
+          #   --retry 3   : retry up to 3 times on transient failures
+          #   --retry-delay 5 : wait 5s between retries
+          #   -C -        : resume partial downloads if possible
+          #   -#          : progress bar
+          #   -H User-Agent : Microsoft blocks some automated requests without this
+          #   --connect-timeout 30 : fail fast if server unreachable
+          #   --max-time 3600 : 1 hour max download time
+
+          curl -L \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-connrefused \
+            -C - \
+            -# \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
+            -H "Accept: */*" \
+            --connect-timeout 30 \
+            --max-time 3600 \
+            -o /tmp/win11vm/win11.iso \
+            "$ISO_URL"
+
+          # Verify download
+          if [ ! -f /tmp/win11vm/win11.iso ]; then
+            echo "❌ ISO download failed — file not found"
+            exit 1
+          fi
+
+          ISO_SIZE=$(stat -c%s /tmp/win11vm/win11.iso 2>/dev/null || stat -f%z /tmp/win11vm/win11.iso 2>/dev/null)
+          ISO_SIZE_MB=$((ISO_SIZE / 1024 / 1024))
+
+          if [ "$ISO_SIZE" -lt 1000000000 ]; then
+            echo "⚠️  ISO file is only ${ISO_SIZE_MB}MB — this seems too small."
+            echo "   A valid Windows 11 ISO should be ~5000-6000 MB."
+            echo "   The download URL may have expired or returned an error page."
+            echo ""
+            echo "   First 500 bytes of file:"
+            head -c 500 /tmp/win11vm/win11.iso | strings | head -10
+            echo ""
+            echo "   ❌ Please provide a fresh, valid Microsoft ISO URL."
+            exit 1
+          fi
+
+          echo ""
           ls -lh /tmp/win11vm/
-          echo "✅ Windows 11 ISO ready"
+          echo "✅ Windows 11 ISO ready (${ISO_SIZE_MB} MB)"
 
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 3 — Create autounattend.xml for unattended setup

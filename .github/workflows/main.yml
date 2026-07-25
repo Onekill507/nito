@@ -1,0 +1,224 @@
+name: Windows 11 VPS - One Click
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: "How long to keep the VPS running (hours, max 6)"
+        required: false
+        default: "6"
+
+env:
+  NGROK_AUTH: ${{ secrets.NGROK_AUTH_TOKEN }}
+  USER: "Admin"
+  PASS: "VPS@2026!"
+
+jobs:
+  start-vps:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Display System Specs
+        shell: powershell
+        run: |
+          Write-Host "============================================" -ForegroundColor Cyan
+          Write-Host "   Windows VPS - System Information" -ForegroundColor Green
+          Write-Host "============================================" -ForegroundColor Cyan
+          Write-Host ""
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_Processor
+          Write-Host "[CPU]  : $($cpu.Name)" -ForegroundColor Yellow
+          Write-Host "[Cores]: $($cpu.NumberOfCores) cores / $($cpu.NumberOfLogicalProcessors) logical processors" -ForegroundColor Yellow
+          Write-Host "[RAM]  : $([math]::Round($os.TotalVisibleMemorySize/1MB, 2)) GB total" -ForegroundColor Yellow
+          Write-Host "[Free] : $([math]::Round($os.FreePhysicalMemory/1MB, 2)) GB free" -ForegroundColor Yellow
+          Write-Host "[OS]   : $($os.Caption) $($os.Version)" -ForegroundColor Yellow
+          Write-Host "[Arch] : $($os.OSArchitecture)" -ForegroundColor Yellow
+          Write-Host ""
+
+      - name: Create Admin User & Enable RDP
+        shell: powershell
+        run: |
+          # Create user with admin privileges
+          $Password = ConvertTo-SecureString "${{ env.PASS }}" -AsPlainText -Force
+          New-LocalUser -Name "${{ env.USER }}" -Password $Password -FullName "VPS Admin" -Description "Remote Desktop User" -PasswordNeverExpires:$true
+          Add-LocalGroupMember -Group "Administrators" -Member "${{ env.USER }}"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "${{ env.USER }}"
+
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # Disable NLA (Network Level Authentication) for easier connection
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+
+          # Disable firewall entirely for tunneling
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+
+          # Disable Windows Update to save bandwidth/CPU
+          Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+          Set-Service -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
+
+          # Disable Defender real-time monitoring to save CPU/RAM
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+
+          # Disable scheduled tasks that eat resources
+          Get-ScheduledTask -TaskName "MicrosoftEdge*" | Disable-ScheduledTask -ErrorAction SilentlyContinue
+          Get-ScheduledTask | Where-Object {$_.TaskName -like "*Telemetry*"} | Disable-ScheduledTask -ErrorAction SilentlyContinue
+
+          # Optimize visual performance for remote desktop
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -ErrorAction SilentlyContinue
+
+          # Set high performance power plan
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+
+          Write-Host "[OK] Admin user created and RDP enabled!" -ForegroundColor Green
+
+      - name: Maximize Disk Space
+        shell: powershell
+        run: |
+          Write-Host "[*] Cleaning disk space..." -ForegroundColor Cyan
+          
+          # Remove unnecessary files
+          $paths = @(
+            "C:\Program Files\dotnet\packs",
+            "C:\Program Files\Microsoft Visual Studio",
+            "C:\Program Files (x86)\Microsoft SDKs",
+            "C:\Program Files (x86)\Windows Kits",
+            "C:\Program Files\Java",
+            "C:\Strawberry",
+            "C:\Android",
+            "C:\SeleniumWebDrivers",
+            "C:\ghcup",
+            "C:\hostedtoolcache",
+            "C:\Program Files\Boost",
+            "C:\Program Files\MongoDB",
+            "C:\Program Files\PostgreSQL",
+            "C:\Program Files\MySQL",
+            "C:\Program Files\LLVM"
+          )
+          
+          foreach ($path in $paths) {
+            if (Test-Path $path) {
+              Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+              Write-Host "  Removed: $path" -ForegroundColor Gray
+            }
+          }
+          
+          # Clear temp files
+          Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+          
+          # Show free space
+          $disk = Get-PSDrive C
+          Write-Host "[OK] Free disk space: $([math]::Round($disk.Free/1GB, 2)) GB" -ForegroundColor Green
+
+      - name: Install ngrok Tunnel
+        shell: powershell
+        run: |
+          Write-Host "[*] Downloading ngrok..." -ForegroundColor Cyan
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "$env:TEMP\ngrok.zip"
+          Expand-Archive -Path "$env:TEMP\ngrok.zip" -DestinationPath "C:\ngrok" -Force
+          
+          # Authenticate ngrok
+          C:\ngrok\ngrok.exe config add-authtoken "${{ env.NGROK_AUTH }}"
+          
+          Write-Host "[OK] ngrok installed!" -ForegroundColor Green
+
+      - name: Start ngrok RDP Tunnel & Keep Alive
+        shell: powershell
+        run: |
+          # Start ngrok tunnel for RDP (port 3389)
+          Write-Host "[*] Starting ngrok tunnel on port 3389..." -ForegroundColor Cyan
+          $ngrokProcess = Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout --log-format=logfmt" -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\ngrok.log"
+          
+          Start-Sleep -Seconds 10
+          
+          # Get the public URL
+          $maxRetries = 15
+          $retry = 0
+          $publicUrl = $null
+          
+          while ($retry -lt $maxRetries -and -not $publicUrl) {
+            try {
+              $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -ErrorAction Stop
+              $publicUrl = $response.tunnels[0].public_url
+            } catch {
+              $retry++
+              Start-Sleep -Seconds 2
+            }
+          }
+          
+          if ($publicUrl) {
+            $tcpUrl = $publicUrl -replace "tcp://", ""
+            
+            Write-Host ""
+            Write-Host "==========================================================" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "   YOUR WINDOWS VPS IS READY!" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "   Connection Details:" -ForegroundColor Yellow
+            Write-Host "   ====================" -ForegroundColor Yellow
+            Write-Host "   IP/Host : $($tcpUrl.Split(':')[0])" -ForegroundColor White
+            Write-Host "   Port    : $($tcpUrl.Split(':')[1])" -ForegroundColor White
+            Write-Host "   User    : ${{ env.USER }}" -ForegroundColor White
+            Write-Host "   Password: ${{ env.PASS }}" -ForegroundColor White
+            Write-Host ""
+            Write-Host "   Full Address for RDP:" -ForegroundColor Yellow
+            Write-Host "   $tcpUrl" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "   HOW TO CONNECT:" -ForegroundColor Yellow
+            Write-Host "   1. Open 'Remote Desktop Connection' (mstsc.exe)" -ForegroundColor White
+            Write-Host "   2. Enter: $tcpUrl" -ForegroundColor White
+            Write-Host "   3. Click Connect, use credentials above" -ForegroundColor White
+            Write-Host ""
+            Write-Host "   OR use Microsoft Remote Desktop (mac/mobile):" -ForegroundColor Yellow
+            Write-Host "   Download from App Store / Play Store" -ForegroundColor White
+            Write-Host ""
+            Write-Host "   VPS will stay alive for up to 6 hours!" -ForegroundColor Magenta
+            Write-Host ""
+            Write-Host "==========================================================" -ForegroundColor Green
+            Write-Host ""
+          } else {
+            Write-Host "[ERROR] Could not get ngrok tunnel URL!" -ForegroundColor Red
+            Write-Host "[DEBUG] ngrok log:" -ForegroundColor Yellow
+            Get-Content "$env:TEMP\ngrok.log" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          
+          # Keep the workflow alive
+          $durationMinutes = [int]("${{ github.event.inputs.duration_hours }}" -replace '[^0-9]','')
+          if ($durationMinutes -le 0 -or $durationMinutes -gt 6) { $durationMinutes = 6 }
+          $durationMs = $durationMinutes * 60 * 60 * 1000
+          
+          Write-Host "[*] VPS will run for $durationMinutes hour(s). Monitoring..." -ForegroundColor Cyan
+          Write-Host "[*] To keep alive, do NOT close this workflow run." -ForegroundColor Yellow
+          
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          
+          while ($sw.ElapsedMilliseconds -lt $durationMs) {
+            # Check if ngrok is still running
+            if ($ngrokProcess.HasExited) {
+              Write-Host "[!] ngrok crashed. Restarting..." -ForegroundColor Red
+              $ngrokProcess = Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout --log-format=logfmt" -PassThru -NoNewWindow
+              Start-Sleep -Seconds 10
+            }
+            
+            # Health check - ensure RDP port is listening
+            $rdp = Test-NetConnection -ComputerName localhost -Port 3389 -WarningAction SilentlyContinue
+            if (-not $rdp.TcpTestSucceeded) {
+              Write-Host "[!] RDP port not responding, restarting service..." -ForegroundColor Red
+              Start-Service -Name TermService -ErrorAction SilentlyContinue
+            }
+            
+            $elapsed = [math]::Round($sw.Elapsed.TotalMinutes, 1)
+            $remaining = [math]::Round(($durationMs - $sw.ElapsedMilliseconds) / 60000, 1)
+            Write-Host "  [STATUS] Elapsed: ${elapsed}m | Remaining: ${remaining}m | RDP: $($rdp.TcpTestSucceeded)" -ForegroundColor DarkGray
+            
+            Start-Sleep -Seconds 60
+          }
+          
+          Write-Host "[*] Session time expired. Shutting down..." -ForegroundColor Yellow

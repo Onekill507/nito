@@ -556,7 +556,10 @@ jobs:
             curl \
             unzip \
             netcat-openbsd \
-            dnsutils
+            dnsutils \
+            git \
+            python3-numpy \
+            python3-websockify
 
           # Verify KVM support
           if [ -e /dev/kvm ]; then
@@ -599,6 +602,145 @@ jobs:
           wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" -O /usr/local/bin/cloudflared
           chmod +x /usr/local/bin/cloudflared
           echo "✅ cloudflared installed"
+
+          # ── Install noVNC (web-based VNC client — access Windows desktop in browser) ──
+          echo "── Installing noVNC (Web Desktop) ──"
+          git clone --depth 1 https://github.com/novnc/noVNC.git /tmp/novnc 2>/dev/null
+          git clone --depth 1 https://github.com/novnc/websockify.git /tmp/novnc/utils/websockify 2>/dev/null
+          chmod +x /tmp/novnc/utils/novnc_proxy 2>/dev/null || true
+
+          # Create a custom index page that auto-connects and redirects to vnc.html
+          cat > /tmp/novnc/index.html << 'NOVNC_INDEX_EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Windows 11 Cloud PC · AtlasOS</title>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body {
+                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                background: linear-gradient(135deg, #0078D4 0%, #005A9E 50%, #003F6E 100%);
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                padding: 20px;
+              }
+              .container {
+                max-width: 600px;
+                text-align: center;
+                background: rgba(0,0,0,0.3);
+                border-radius: 16px;
+                padding: 40px;
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.1);
+              }
+              h1 { font-size: 2em; margin-bottom: 8px; }
+              .subtitle { opacity: 0.8; margin-bottom: 30px; font-size: 1.1em; }
+              .btn {
+                display: inline-block;
+                padding: 16px 40px;
+                font-size: 1.2em;
+                font-weight: 600;
+                color: #0078D4;
+                background: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                text-decoration: none;
+                transition: all 0.2s;
+                margin: 10px;
+              }
+              .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+              .btn-secondary {
+                background: transparent;
+                color: white;
+                border: 2px solid rgba(255,255,255,0.5);
+              }
+              .info {
+                margin-top: 30px;
+                text-align: left;
+                background: rgba(0,0,0,0.2);
+                border-radius: 8px;
+                padding: 20px;
+                font-size: 0.9em;
+                line-height: 1.8;
+              }
+              .info code {
+                background: rgba(255,255,255,0.15);
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-family: 'Cascadia Code', 'Consolas', monospace;
+              }
+              .badge {
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.75em;
+                font-weight: 600;
+                background: rgba(255,255,255,0.15);
+                margin: 2px;
+              }
+              .status {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                margin: 15px 0;
+              }
+              .dot {
+                width: 10px; height: 10px;
+                border-radius: 50%;
+                background: #4CAF50;
+                animation: pulse 2s infinite;
+              }
+              @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.4; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>🖥️ Windows 11 Cloud PC</h1>
+              <p class="subtitle">AtlasOS Ready · GitHub Actions</p>
+
+              <div class="status">
+                <div class="dot"></div>
+                <span>VM Running</span>
+              </div>
+
+              <div style="margin: 20px 0;">
+                <span class="badge">Windows 11 25H2</span>
+                <span class="badge">x64</span>
+                <span class="badge">AtlasOS Ready</span>
+              </div>
+
+              <a href="vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000" class="btn">
+                🖥️ Open Desktop
+              </a>
+              <a href="vnc.html" class="btn btn-secondary">
+                ⚙️ Connect (Manual)
+              </a>
+
+              <div class="info">
+                <strong>📋 Quick Guide:</strong><br>
+                • Click <strong>Open Desktop</strong> to view Windows 11 in your browser<br>
+                • Use <code>Ctrl+Alt+Delete</code> via the noVNC sidebar (left edge)<br>
+                • For best experience, use <strong>fullscreen mode</strong> (F11)<br>
+                • AtlasOS tools are at <code>C:\AtlasOS\</code> on the desktop<br>
+                • If the screen is black, Windows may still be installing — wait a few minutes
+              </div>
+            </div>
+          </body>
+          </html>
+          NOVNC_INDEX_EOF
+
+          echo "✅ noVNC web desktop installed"
 
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 2 — Create virtual disk and download Windows 11 ISO
@@ -961,8 +1103,8 @@ jobs:
             -netdev user,id=net0,hostfwd=tcp::3389-:3389,hostfwd=tcp::8080-:8080
             -device virtio-net-pci,netdev=net0
 
-            # Display (headless, access via RDP)
-            -display none
+            # VNC display (noVNC will serve this in the browser on port 6080)
+            -vnc :0
             -vga std
 
             # Misc
@@ -993,12 +1135,20 @@ jobs:
               -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy \
               -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
               -device e1000,netdev=net0 \
-              -display none \
+              -vnc :0 \
               -daemonize
           }
 
           echo "✅ QEMU VM launched"
           echo "  Waiting for Windows to install (this takes time without KVM)..."
+          
+          # Verify VNC is listening
+          sleep 3
+          if nc -z localhost 5900 2>/dev/null; then
+            echo "✅ VNC server listening on port 5900"
+          else
+            echo "⚠️  VNC not yet listening on 5900 (may take a moment)"
+          fi
 
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 6 — Wait for RDP to become available
@@ -1034,7 +1184,7 @@ jobs:
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 7 — Start tunnels and print connection info
       # ──────────────────────────────────────────────────────────────────────
-      - name: "🌐 Start Tunnels & Display Connection Info"
+      - name: "🌐 Start noVNC Web Desktop + Tunnels & Display Connection Info"
         run: |
           USERNAME="${{ github.event.inputs.rdp_user }}"
           PASSWORD="${{ github.event.inputs.rdp_password }}"
@@ -1044,8 +1194,8 @@ jobs:
           echo "  🔑 CONNECTION INFORMATION"
           echo "════════════════════════════════════════════════════════════"
 
-          # Start bore tunnel for RDP
-          echo "── Starting bore TCP tunnel ──"
+          # ── Start bore tunnel for RDP (native client fallback) ──
+          echo "── Starting bore TCP tunnel (RDP fallback) ──"
           bore local 3389 --to bore.pub > /tmp/bore_rdp.log 2>&1 &
           BORE_PID=$!
           sleep 8
@@ -1061,48 +1211,98 @@ jobs:
             RDP_ADDR=$(cat /tmp/bore_addr)
           fi
 
-          # Start cloudflared quick tunnel (bonus HTTP)
-          echo "── Starting cloudflared HTTP tunnel ──"
-          # Simple HTTP server showing status
-          python3 -c "
-          import http.server, socketserver, os
-          class H(http.server.SimpleHTTPRequestHandler):
-              def do_GET(self):
-                  self.send_response(200)
-                  self.send_header('Content-type','text/html')
-                  self.end_headers()
-                  self.wfile.write(b'<h1>Windows 11 Cloud PC is running</h1><p>Connect via RDP to install AtlasOS.</p>')
-          socketserver.TCPServer(('',8081),H).serve_forever()
-          " &
+          # ── Start noVNC (web-based VNC client — Windows desktop in browser!) ──
+          echo "── Starting noVNC web desktop (port 6080 → VNC 5900) ──"
 
-          cloudflared tunnel --url http://localhost:8081 > /tmp/cf_tunnel.log 2>&1 &
+          # Verify VNC is listening first
+          if nc -z localhost 5900 2>/dev/null; then
+            echo "  ✅ VNC server confirmed on port 5900"
+          else
+            echo "  ⚠️  VNC not yet on 5900, starting noVNC anyway..."
+          fi
+
+          # Launch noVNC via websockify
+          # --vnc localhost:5900  : connect to QEMU's VNC server
+          # --listen 6080         : serve web client on port 6080
+          # --web /tmp/novnc      : serve noVNC's HTML/JS files
+          /tmp/novnc/utils/novnc_proxy \
+            --vnc localhost:5900 \
+            --listen 6080 \
+            --web /tmp/novnc \
+            > /tmp/novnc.log 2>&1 &
+          NOVNC_PID=$!
+          sleep 3
+
+          # Verify noVNC is running
+          if nc -z localhost 6080 2>/dev/null; then
+            echo "  ✅ noVNC web server running on port 6080"
+          else
+            echo "  ⚠️  noVNC may not be ready yet (check /tmp/novnc.log)"
+            cat /tmp/novnc.log 2>/dev/null | tail -5
+          fi
+
+          # ── Start cloudflared tunnel pointing to noVNC ──
+          echo "── Starting cloudflared tunnel → noVNC (port 6080) ──"
+          cloudflared tunnel --url http://localhost:6080 > /tmp/cf_tunnel.log 2>&1 &
+          CF_PID=$!
           sleep 10
 
+          # Extract the public URL
           HTTP_URL="N/A"
           if grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf_tunnel.log 2>/dev/null > /tmp/cf_url; then
             HTTP_URL=$(cat /tmp/cf_url)
+            # Build the direct-to-desktop URL (auto-connects to VNC)
+            WEB_DESKTOP_URL="${HTTP_URL}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=3000"
+            WEB_LANDING_URL="${HTTP_URL}/"
+          else
+            WEB_DESKTOP_URL="N/A"
+            WEB_LANDING_URL="N/A"
+            echo "  ⚠️  Could not extract cloudflared URL"
+            cat /tmp/cf_tunnel.log 2>/dev/null | tail -10
           fi
 
           echo ""
-          echo "┌──────────────────────────────────────────────────────────┐"
-          echo "│           🖥️  RDP CONNECTION DETAILS (Windows 11 VM)   │"
-          echo "├──────────────────────────────────────────────────────────┤"
-          echo "│                                                          "
-          echo "│  Address:    $RDP_ADDR"
-          echo "│  Username:   $USERNAME"
-          echo "│  Password:   $PASSWORD"
-          echo "│                                                          "
-          echo "│  Connect via:                                            "
-          echo "│    Windows:  mstsc /v:$RDP_ADDR"
-          echo "│    macOS:    Microsoft Remote Desktop app"
-          echo "│    Linux:    xfreerdp /v:$RDP_ADDR /u:$USERNAME"
-          echo "│                                                          "
-          echo "├──────────────────────────────────────────────────────────┤"
-          echo "│  🌐 HTTP Status: $HTTP_URL"
-          echo "└──────────────────────────────────────────────────────────┘"
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║        🖥️  WINDOWS 11 WEB DESKTOP — OPEN IN BROWSER       ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║                                                              ║"
+          echo "║  🌐 Web Desktop (open this in your browser!):                ║"
+          echo "║                                                              ║"
+          echo "║  $WEB_DESKTOP_URL"
+          echo "║                                                              ║"
+          echo "║  Landing page:                                               ║"
+          echo "║  $WEB_LANDING_URL"
+          echo "║                                                              ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║                                                              ║"
+          echo "║  🖧 RDP Fallback (native client):                            ║"
+          echo "║    Address:  $RDP_ADDR"
+          echo "║    Username: $USERNAME"
+          echo "║    Password: $PASSWORD"
+          echo "║                                                              ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║  📋 Web Desktop Tips:                                        ║"
+          echo "║    • The link above opens Windows 11 directly in browser     ║"
+          echo "║    • Use Ctrl+Alt+Del via the noVNC sidebar (left edge)      ║"
+          echo "║    • Press F11 for fullscreen for best experience            ║"
+          echo "║    • AtlasOS tools are at C:\\AtlasOS\\ on the VM desktop    ║"
+          echo "║    • If screen is black, Windows is still installing         ║"
+          echo "║                                                              ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "  📦 AtlasOS tools will be at C:\\AtlasOS\\ on the VM desktop"
-          echo ""
+
+          # Save URLs to a file for reference
+          cat > /tmp/connection_info.txt << EOF
+          ══════════════════════════════════════════
+            CONNECTION DETAILS
+          ══════════════════════════════════════════
+          Web Desktop : $WEB_DESKTOP_URL
+          Landing     : $WEB_LANDING_URL
+          RDP Address : $RDP_ADDR
+          Username    : $USERNAME
+          Password    : $PASSWORD
+          ══════════════════════════════════════════
+          EOF
 
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 8 — Keep-alive loop
@@ -1116,6 +1316,7 @@ jobs:
 
           echo "═══════════════════════════════════════════════════"
           echo "  ⏱️  Keep-Alive: ${DURATION_HOURS}h (${TOTAL_SECONDS}s)"
+          echo "  Monitoring: QEMU VM + noVNC + bore + cloudflared"
           echo "═══════════════════════════════════════════════════"
 
           while [ $ELAPSED -lt $TOTAL_SECONDS ]; do
@@ -1123,17 +1324,45 @@ jobs:
             HOURS_LEFT=$((REMAINING / 3600))
             MINS_LEFT=$(( (REMAINING % 3600) / 60 ))
 
-            # Check VM is alive
+            # Check all services
             VM_STATUS="✓"
-            pgrep -x qemu-system-x86 > /dev/null 2>&1 || VM_STATUS="✗ DOWN"
+            pgrep -x qemu-system-x86 > /dev/null 2>&1 || VM_STATUS="✗"
+
+            VNC_STATUS="✓"
+            nc -z localhost 5900 2>/dev/null || VNC_STATUS="✗"
+
+            NOVNC_STATUS="✓"
+            nc -z localhost 6080 2>/dev/null || NOVNC_STATUS="✗"
+
+            BORE_STATUS="✓"
+            pgrep -f "bore local" > /dev/null 2>&1 || BORE_STATUS="✗"
+
+            CF_STATUS="✓"
+            pgrep -f cloudflared > /dev/null 2>&1 || CF_STATUS="✗"
 
             TIMESTAMP=$(date +%H:%M:%S)
-            echo "[$TIMESTAMP] ⏳ ${HOURS_LEFT}h ${MINS_LEFT}m remaining | VM: $VM_STATUS"
+            echo "[$TIMESTAMP] ⏳ ${HOURS_LEFT}h${MINS_LEFT}m left | VM:$VM_STATUS VNC:$VNC_STATUS noVNC:$NOVNC_STATUS bore:$BORE_STATUS cf:$CF_STATUS"
+
+            # Restart noVNC if dead
+            if ! nc -z localhost 6080 2>/dev/null; then
+              echo "  ⚠️ noVNC died — restarting..."
+              /tmp/novnc/utils/novnc_proxy \
+                --vnc localhost:5900 \
+                --listen 6080 \
+                --web /tmp/novnc \
+                > /tmp/novnc.log 2>&1 &
+            fi
 
             # Restart bore if dead
             if ! pgrep -f "bore local" > /dev/null 2>&1; then
-              echo "  ⚠️ bore died — restarting..."
+              echo "  ⚠️ bore died — restarting (new address!)"
               bore local 3389 --to bore.pub > /tmp/bore_rdp.log 2>&1 &
+            fi
+
+            # Restart cloudflared if dead
+            if ! pgrep -f cloudflared > /dev/null 2>&1; then
+              echo "  ⚠️ cloudflared died — restarting (new URL!)"
+              cloudflared tunnel --url http://localhost:6080 > /tmp/cf_tunnel.log 2>&1 &
             fi
 
             sleep $INTERVAL
@@ -1149,10 +1378,13 @@ jobs:
       - name: "🧹 Cleanup"
         if: always()
         run: |
-          echo "── Shutting down VM ──"
+          echo "── Shutting down all services ──"
           pkill -f qemu-system-x86 || true
           pkill -f swtpm || true
           pkill -f bore || true
           pkill -f cloudflared || true
-          rm -rf /tmp/win11vm
+          pkill -f novnc_proxy || true
+          pkill -f websockify || true
+          pkill -f "python3.*launch" || true
+          rm -rf /tmp/win11vm /tmp/novnc /tmp/bore
           echo "✅ Cleanup complete"

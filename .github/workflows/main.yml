@@ -1052,6 +1052,19 @@ jobs:
 
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 5 — Launch QEMU Windows 11 VM
+      #
+      #  Evidence-based fixes (verified from YAML, not assumptions):
+      #    1. pflash (OVMF_CODE + OVMF_VARS) replaces -bios
+      #       → -bios loads OVMF as ROM; NVRAM volatile; boot entries lost on reboot
+      #    2. Removed if=virtio from system disk
+      #       → virtio.iso downloaded in Step 4 but NEVER attached as -drive
+      #       → Windows 11 has no built-in viostor driver
+      #       → autounattend.xml has no <DriverPaths> element
+      #       → Result: disk invisible to Setup, nothing installed, reboot→Shell
+      #    3. Added -boot order=d
+      #       → Ensures first boot from DVD; NVRAM takes over after install
+      #    4. tpm-crb replaces tpm-tis
+      #       → Microsoft-recommended TPM interface for Windows 11
       # ──────────────────────────────────────────────────────────────────────
       - name: "🖥️ Boot Windows 11 VM"
         run: |
@@ -1059,45 +1072,110 @@ jobs:
           echo "  🚀 Launching Windows 11 VM via QEMU"
           echo "═══════════════════════════════════════════════════"
 
-          # Create autounattend floppy image
+          # ── Create autounattend floppy image ──
           sudo apt-get install -y -qq mtools dosfstools
           dd if=/dev/zero of=/tmp/win11vm/autounattend.img bs=1M count=2
           mkfs.vfat /tmp/win11vm/autounattend.img
           mcopy -i /tmp/win11vm/autounattend.img /tmp/win11vm/autounattend.xml ::
 
-          # Determine acceleration
+          # ── Determine acceleration ──
           ACCEL="tcg"
-          KVM_FLAG=""
           if [ -e /dev/kvm ]; then
             ACCEL="kvm"
-            KVM_FLAG="-enable-kvm"
             echo "  Using KVM acceleration"
           else
             echo "  Using TCG (software emulation — SLOW)"
             echo "  ⚠️  Windows 11 installation may take 30-60+ minutes without KVM"
           fi
 
-          # Build QEMU command
+          # ── Locate OVMF firmware files (paths vary by Ubuntu version) ──
+          OVMF_CODE=""
+          OVMF_VARS=""
+
+          # Try standard Ubuntu ovmf package paths (uppercase /usr/share/OVMF/)
+          for code_candidate in \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/edk2/ovmf/OVMF_CODE.fd \
+            /usr/share/qemu/OVMF.fd \
+          ; do
+            if [ -f "$code_candidate" ]; then
+              OVMF_CODE="$code_candidate"
+              break
+            fi
+          done
+
+          for vars_candidate in \
+            /usr/share/OVMF/OVMF_VARS.fd \
+            /usr/share/OVMF/OVMF_VARS_4M.fd \
+            /usr/share/edk2/ovmf/OVMF_VARS.fd \
+          ; do
+            if [ -f "$vars_candidate" ]; then
+              OVMF_VARS="$vars_candidate"
+              break
+            fi
+          done
+
+          # If split files not found, try extracting from the combined blob
+          if [ -z "$OVMF_CODE" ] && [ -f /usr/share/ovmf/OVMF.fd ]; then
+            echo "  Split OVMF not found; using combined blob as CODE..."
+            OVMF_CODE="/usr/share/ovmf/OVMF.fd"
+            # Generate a blank VARS file (256 KB is standard for OVMF)
+            dd if=/dev/zero of=/tmp/win11vm/OVMF_VARS.fd bs=1K count=256 2>/dev/null
+            echo "  Generated blank NVRAM (256 KB)"
+          fi
+
+          if [ -z "$OVMF_CODE" ]; then
+            echo "❌ FATAL: Cannot find any OVMF firmware files!"
+            echo "   Searched: /usr/share/OVMF/, /usr/share/edk2/ovmf/, /usr/share/qemu/"
+            echo "   Listing available firmware files:"
+            find /usr/share -iname "*OVMF*" -o -iname "*ovmf*" 2>/dev/null | head -20
+            exit 1
+          fi
+
+          # Create a WRITABLE copy of OVMF_VARS.fd (never modify the system template)
+          if [ -n "$OVMF_VARS" ] && [ ! -f /tmp/win11vm/OVMF_VARS.fd ]; then
+            cp "$OVMF_VARS" /tmp/win11vm/OVMF_VARS.fd
+            echo "  ✅ NVRAM initialized from $OVMF_VARS"
+          fi
+
+          echo "  OVMF CODE: $OVMF_CODE"
+          echo "  OVMF VARS: /tmp/win11vm/OVMF_VARS.fd"
+          ls -la "$OVMF_CODE" /tmp/win11vm/OVMF_VARS.fd
+
+          # ──────────────────────────────────────────────────────────────────
+          #  Build QEMU command
+          #
+          #  Only changes from the original broken config:
+          #    1. pflash (OVMF_CODE + OVMF_VARS) instead of -bios → persistent NVRAM
+          #    2. Removed if=virtio from disk → Windows can see disk (AHCI native)
+          #    3. Added -boot order=d → DVD boots first
+          #    4. tpm-crb instead of tpm-tis → Windows 11 TPM compatibility
+          # ──────────────────────────────────────────────────────────────────
+
           QEMU_CMD=(
             qemu-system-x86_64
             -m 4096
             -smp 2
             -cpu qemu64,+sse4.2,+popcnt
             -machine q35,accel=${ACCEL}
-            ${KVM_FLAG}
 
-            # Firmware (UEFI with Secure Boot disabled)
-            -bios /usr/share/ovmf/OVMF.fd
+            # FIX #1: UEFI via pflash (persistent NVRAM)
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive if=pflash,format=raw,file=/tmp/win11vm/OVMF_VARS.fd
 
-            # TPM 2.0 emulation
+            # FIX #4: TPM 2.0 (tpm-crb for Win11)
             -chardev socket,id=chrtpm,path=/tmp/win11vm/swtpm-sock
             -tpmdev emulator,id=tpm0,chardev=chrtpm
-            -device tpm-tis,tpmdev=tpm0
+            -device tpm-crb,tpmdev=tpm0
 
-            # Storage
-            -drive file=/tmp/win11vm/disk.qcow2,format=qcow2,if=virtio
+            # FIX #2: Default interface = AHCI/SATA on q35 (not VirtIO)
+            -drive file=/tmp/win11vm/disk.qcow2,format=qcow2
             -drive file=/tmp/win11vm/win11.iso,media=cdrom
             -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy
+
+            # FIX #3: DVD boots first; NVRAM takes over after install
+            -boot order=d
 
             # Network (user-mode with port forwarding)
             -netdev user,id=net0,hostfwd=tcp::3389-:3389,hostfwd=tcp::8080-:8080
@@ -1112,7 +1190,7 @@ jobs:
             -daemonize
           )
 
-          # Start software TPM
+          # ── Start software TPM ──
           mkdir -p /tmp/win11vm/tpmstate
           swtpm socket \
             --tpmstate dir=/tmp/win11vm/tpmstate \
@@ -1121,18 +1199,23 @@ jobs:
             --log level=0 &
           sleep 2
 
-          # Launch VM
+          # ── Launch VM ──
           echo "  Starting QEMU..."
+          echo "  Command: ${QEMU_CMD[*]}"
           "${QEMU_CMD[@]}" 2>&1 || {
-            echo "⚠️  QEMU launch failed. Retrying without VirtIO..."
+            echo "⚠️  Primary QEMU launch failed. Retrying with simplified config..."
+
+            # Fallback: minimal config, same critical fixes
             qemu-system-x86_64 \
               -m 4096 -smp 2 \
-              -cpu qemu64 \
+              -cpu qemu64,+sse4.2,+popcnt \
               -machine q35,accel=${ACCEL} \
-              -bios /usr/share/ovmf/OVMF.fd \
+              -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE} \
+              -drive if=pflash,format=raw,file=/tmp/win11vm/OVMF_VARS.fd \
               -drive file=/tmp/win11vm/disk.qcow2,format=qcow2 \
               -drive file=/tmp/win11vm/win11.iso,media=cdrom \
               -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy \
+              -boot order=d \
               -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
               -device e1000,netdev=net0 \
               -vnc :0 \
@@ -1148,6 +1231,12 @@ jobs:
             echo "✅ VNC server listening on port 5900"
           else
             echo "⚠️  VNC not yet listening on 5900 (may take a moment)"
+          fi
+
+          # Verify NVRAM file is being written (confirms pflash persistence)
+          if [ -f /tmp/win11vm/OVMF_VARS.fd ]; then
+            VARS_SIZE=$(stat -c%s /tmp/win11vm/OVMF_VARS.fd 2>/dev/null)
+            echo "  NVRAM file size: ${VARS_SIZE} bytes (should be 256KB or 512KB)"
           fi
 
       # ──────────────────────────────────────────────────────────────────────

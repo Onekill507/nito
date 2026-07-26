@@ -1,58 +1,3 @@
-# ============================================================================
-#  ☁️  Windows 11 Cloud PC  ·  AtlasOS Ready  ·  GitHub Actions (Free Tier)
-# ============================================================================
-#
-#  WHAT THIS DOES
-#  ──────────────
-#  Boots a Windows environment on GitHub's free hosted runner, exposes it to
-#  the public internet through a tokenless TCP tunnel (bore.pub), pre-loads
-#  the AtlasOS playbook + AME Wizard, and keeps the session alive for up to
-#  6 hours — the GitHub Actions per-job maximum.
-#
-#  TWO MODES
-#  ─────────
-#  Mode A  →  "runner"   : Bare-metal Windows Server 2022 runner (fast, but
-#                           AtlasOS officially targets Win 11 desktop, so
-#                           some tweaks may not apply cleanly).
-#  Mode B  →  "qemu-vm"  : Ubuntu runner + QEMU/KVM running a genuine
-#                           Windows 11 Pro 24H2 evaluation ISO. Slower to
-#                           boot, but gives you a real Win 11 desktop that
-#                           AtlasOS fully supports.
-#
-#  ACCESS
-#  ──────
-#  • RDP  →  bore.pub public address (printed in workflow logs)
-#  • No API keys, tokens, or secrets required for the tunnel.
-#
-#  REQUIREMENTS (from the user's checklist)
-#  ─────────────────────────────────────────
-#  ☑ Windows 11 Pro           — Mode B provides this natively
-#  ☑ Windows 11 24H2/25H2    — Mode B uses the latest eval ISO
-#  ☑ 64-bit (x64)             — Both modes are x64
-#  ☑ Administrator privileges — Configured automatically
-#  ☑ Clean installation       — Fresh runner / fresh VM each run
-#  ☑ Internet connection      — GitHub runner has outbound internet
-#  ☑ Sufficient disk space    — 14 GB (runner) / 64 GB (QEMU disk)
-#  ☑ OOBE completed           — Automated via autounattend.xml (Mode B)
-#  ☑ Backup completed         — N/A (disposable ephemeral environment)
-#
-#  HOW TO USE
-#  ──────────
-#  1. Push this file to your repo at .github/workflows/windows11-atlasos.yml
-#  2. Go to  Actions  →  "Windows 11 Cloud PC · AtlasOS"  →  Run workflow
-#  3. Pick your mode (runner or qemu-vm) and duration (1–6 hours)
-#  4. Watch the logs — the public RDP address appears within ~2 minutes
-#  5. Connect with any RDP client using the credentials shown in the logs
-#  6. Run the AtlasOS playbook from the desktop shortcut or C:\AtlasOS\
-#
-#  SECURITY NOTICE
-#  ───────────────
-#  This exposes RDP to the public internet. Use strong passwords, limit
-#  duration, and never run this on a repo containing secrets you care about.
-#  The environment is destroyed when the job ends.
-#
-# ============================================================================
-
 name: "Windows 11 Cloud PC · AtlasOS"
 
 on:
@@ -63,60 +8,42 @@ on:
         required: true
         default: "runner"
         type: choice
-        options:
-          - runner
-          - qemu-vm
+        options: ["runner", "qemu-vm"]
       duration_hours:
         description: "Keep-alive duration in hours (max 6)"
         required: true
         default: "6"
         type: choice
-        options:
-          - "1"
-          - "2"
-          - "3"
-          - "4"
-          - "5"
-          - "6"
+        options: ["1", "2", "3", "4", "5", "6"]
       rdp_user:
         description: "RDP username"
         required: true
         default: "atlasuser"
       rdp_password:
-        description: "RDP password (min 8 chars, use something strong)"
+        description: "RDP password"
         required: true
         default: "Atlas-Str0ng-2026!"
       win11_iso_url:
-        description: "Windows 11 ISO download URL (paste your fresh Microsoft link here — links expire!)"
+        description: "Windows 11 ISO URL"
         required: false
         default: "https://software.download.prss.microsoft.com/dbazure/Win11_25H2_English_x64_v2.iso?t=9ce61a6e-0961-4adb-b5da-14ff51066506&P1=1785089598&P2=602&P3=2&P4=ClnX9RbSz6xculiVgxOqh4KP1mYV7xuzWLCe%2bbiDQzmwD%2fZZWAfcMqOmyVKCqgCaVKF5IgB7iQDlxmKUDodteYkikDp%2buwwHy4BKytjsnwMmO0oxK0JCNDlbK635hEAcyvky%2fvHKER1buQLNyfLkCMwcoWDd48ZSZDDF1jQWjNFpyLO8fulwvgfybp0bJ5%2fje8oTDA0kw1vO92BhUVo0pi6l%2fs8TmmK1XiC8WmNLi559P%2f4LsFFYKZmYDkiM%2bPeDSBpiiJ%2fKTqXib93C1cNNHXBYqo%2fGJnCsOzAtjitjtfFRkYRGdrTGZMzjuefBHUsCR8%2fTNKS7nk5UGHXlTt6kfg%3d%3d"
 
-# ── Concurrency guard: only one instance at a time ──
 concurrency:
   group: win11-atlasos-${{ github.ref }}
   cancel-in-progress: false
 
-# ── Global environment ──
 env:
   BORE_VERSION: "0.5.2"
-  CLOUDFLARED_VERSION: "2024.12.1"
   ATLAS_PLAYBOOK_URL: "https://github.com/Atlas-OS/Atlas/releases/latest/download/AtlasPlaybook.exe"
   AME_WIZARD_URL: "https://dl.ameliorated.io/AME%20Wizard.exe"
 
 jobs:
-  # ==========================================================================
-  #  JOB 1  ·  BARE-METAL RUNNER MODE
-  # ==========================================================================
   runner-mode:
     name: "Mode A · Windows Runner + RDP Tunnel"
     if: ${{ github.event.inputs.mode == 'runner' }}
     runs-on: windows-latest
-    timeout-minutes: 360          # 6 h hard ceiling (GitHub limit)
-
+    timeout-minutes: 360
     steps:
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 1 — Gather system information
-      # ──────────────────────────────────────────────────────────────────────
       - name: "📋 System Information"
         shell: pwsh
         run: |
@@ -125,1049 +52,265 @@ jobs:
           Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
           systeminfo | Select-String "OS Name|OS Version|System Type|Total Physical Memory|Processor"
           Get-ComputerInfo | Select-Object CsName, WindowsProductName, WindowsVersion, OsBuildNumber, CsProcessors, CsTotalPhysicalMemory | Format-List
-          Write-Host "Disk Space:" -ForegroundColor Yellow
           Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{N='Used(GB)';E={[math]::Round($_.Used/1GB,2)}}, @{N='Free(GB)';E={[math]::Round($_.Free/1GB,2)}}, @{N='Total(GB)';E={[math]::Round(($_.Used+$_.Free)/1GB,2)}}
 
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 2 — Enable and configure Remote Desktop
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🖥️ Enable RDP & Create Admin User"
         shell: pwsh
         run: |
           $username = "${{ github.event.inputs.rdp_user }}"
           $password = "${{ github.event.inputs.rdp_password }}"
-
-          Write-Host "── Enabling Remote Desktop ──" -ForegroundColor Green
-
-          # Enable RDP in registry
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                           -Name "fDenyTSConnections" -Value 0
-
-          # Enable RDP firewall rules
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-
-          # Require NLA (Network Level Authentication) for security
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "UserAuthentication" -Value 1
-
-          # Configure RDP for better remote experience
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "DWMFRAMEINTERVAL" -Value 33   # ~30 FPS
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations' `
-                           -Name "DWMRemoting" -Value 1
-
-          Write-Host "── Creating admin user: $username ──" -ForegroundColor Green
-
-          # Create user with secure password
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username `
-                        -Password $securePass `
-                        -FullName "AtlasOS Admin" `
-                        -Description "Remote admin for AtlasOS setup" `
-                        -PasswordNeverExpires `
-                        -ErrorAction SilentlyContinue
-
-          # Add to Administrators and Remote Desktop Users groups
+          New-LocalUser -Name $username -Password $securePass -FullName "AtlasOS Admin" -Description "Remote admin for AtlasOS setup" -PasswordNeverExpires -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
-
-          # Disable password complexity for this ephemeral env (optional, the password above meets complexity)
-          # secedit /export /cfg C:\secpol.cfg
-          # (Get-Content C:\secpol.cfg) -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content C:\secpol.cfg
-          # secedit /configure /db C:\Windows\Security\local.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY
-
-          # Auto-logon for convenience (optional)
           $regPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
           Set-ItemProperty -Path $regPath -Name "AutoAdminLogon" -Value "1"
           Set-ItemProperty -Path $regPath -Name "DefaultUserName" -Value $username
           Set-ItemProperty -Path $regPath -Name "DefaultPassword" -Value $password
-
-          Write-Host "✅ RDP enabled · User '$username' created with admin privileges" -ForegroundColor Green
-
-          # Restart the TermService to apply changes
           Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
 
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 3 — Install bore.pub tunnel (tokenless TCP exposure)
-      # ──────────────────────────────────────────────────────────────────────
-      - name: "🌐 Install bore (Tokenless TCP Tunnel)"
+      - name: "🌐 Install bore"
         shell: pwsh
         run: |
-          Write-Host "── Downloading bore v${{ env.BORE_VERSION }} ──" -ForegroundColor Green
-
-          $boreUrl = "https://github.com/ekzhang/bore/releases/download/v${{ env.BORE_VERSION }}/bore-v${{ env.BORE_VERSION }}-x86_64-pc-windows-msvc.zip"
-          $outDir  = "C:\tools\bore"
-
+          $outDir = "C:\tools\bore"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-
-          # Download with retry logic
-          $maxRetries = 3
-          for ($i = 1; $i -le $maxRetries; $i++) {
-            try {
-              Write-Host "  Attempt $i of $maxRetries..."
-              Invoke-WebRequest -Uri $boreUrl -OutFile "$outDir\bore.zip" -UseBasicParsing -TimeoutSec 60
-              break
-            } catch {
-              Write-Host "  Download failed: $_" -ForegroundColor Red
-              if ($i -eq $maxRetries) { throw }
-              Start-Sleep -Seconds 5
-            }
-          }
-
+          $boreUrl = "https://github.com/ekzhang/bore/releases/download/v${{ env.BORE_VERSION }}/bore-v${{ env.BORE_VERSION }}-x86_64-pc-windows-msvc.zip"
+          Invoke-WebRequest -Uri $boreUrl -OutFile "$outDir\bore.zip" -UseBasicParsing -TimeoutSec 120
           Expand-Archive -Path "$outDir\bore.zip" -DestinationPath $outDir -Force
           Remove-Item "$outDir\bore.zip" -ErrorAction SilentlyContinue
-
-          # Find the bore executable
           $boreExe = Get-ChildItem -Path $outDir -Recurse -Filter "bore.exe" | Select-Object -First 1
-          if ($boreExe) {
-            Copy-Item $boreExe.FullName "$outDir\bore.exe" -Force -ErrorAction SilentlyContinue
-            Write-Host "✅ bore installed at $outDir\bore.exe" -ForegroundColor Green
-          } else {
-            # Fallback: check if bore.exe is directly in outDir
-            if (Test-Path "$outDir\bore.exe") {
-              Write-Host "✅ bore installed at $outDir\bore.exe" -ForegroundColor Green
-            } else {
-              Write-Host "❌ bore.exe not found after extraction" -ForegroundColor Red
-              Get-ChildItem -Path $outDir -Recurse | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
-              throw "bore.exe not found"
-            }
-          }
+          if ($boreExe) { Copy-Item $boreExe.FullName "$outDir\bore.exe" -Force }
 
-          # Add to PATH
           echo "$outDir" >> $env:GITHUB_PATH
 
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 4 — Install cloudflared (bonus: HTTP tunnel for web access)
-      # ──────────────────────────────────────────────────────────────────────
-      - name: "☁️ Install cloudflared (Bonus HTTP Tunnel)"
+      - name: "☁️ Install cloudflared"
         shell: pwsh
         run: |
-          Write-Host "── Downloading cloudflared ──" -ForegroundColor Green
-
-          $cfUrl  = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-          $cfPath = "C:\tools\cloudflared.exe"
-
           New-Item -ItemType Directory -Force -Path "C:\tools" | Out-Null
-          Invoke-WebRequest -Uri $cfUrl -OutFile $cfPath -UseBasicParsing -TimeoutSec 120
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "C:\tools\cloudflared.exe" -UseBasicParsing -TimeoutSec 120
 
-          Write-Host "✅ cloudflared installed at $cfPath" -ForegroundColor Green
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 5 — Download AtlasOS Playbook + AME Wizard
-      # ──────────────────────────────────────────────────────────────────────
       - name: "📦 Download AtlasOS Toolkit"
         shell: pwsh
         run: |
-          Write-Host "── Preparing AtlasOS installation files ──" -ForegroundColor Green
-
           $atlasDir = "C:\AtlasOS"
           New-Item -ItemType Directory -Force -Path $atlasDir | Out-Null
-
-          # Download AtlasOS Playbook
-          Write-Host "  Downloading AtlasOS Playbook..." -ForegroundColor Yellow
-          try {
-            Invoke-WebRequest -Uri "${{ env.ATLAS_PLAYBOOK_URL }}" `
-                              -OutFile "$atlasDir\AtlasPlaybook.exe" `
-                              -UseBasicParsing -TimeoutSec 120
-            Write-Host "  ✅ AtlasPlaybook.exe downloaded" -ForegroundColor Green
-          } catch {
-            Write-Host "  ⚠️ AtlasPlaybook download failed: $_" -ForegroundColor Red
-            Write-Host "  You can download it manually via RDP from:" -ForegroundColor Yellow
-            Write-Host "  https://github.com/Atlas-OS/Atlas/releases" -ForegroundColor Cyan
-          }
-
-          # Download AME Wizard
-          Write-Host "  Downloading AME Wizard..." -ForegroundColor Yellow
-          try {
-            Invoke-WebRequest -Uri "${{ env.AME_WIZARD_URL }}" `
-                              -OutFile "$atlasDir\AME_Wizard.exe" `
-                              -UseBasicParsing -TimeoutSec 120
-            Write-Host "  ✅ AME_Wizard.exe downloaded" -ForegroundColor Green
-          } catch {
-            Write-Host "  ⚠️ AME Wizard download failed: $_" -ForegroundColor Red
-            Write-Host "  You can download it manually via RDP from:" -ForegroundColor Yellow
-            Write-Host "  https://ameliorated.io" -ForegroundColor Cyan
-          }
-
-          # Create desktop shortcut
+          try { Invoke-WebRequest -Uri "${{ env.ATLAS_PLAYBOOK_URL }}" -OutFile "$atlasDir\AtlasPlaybook.exe" -UseBasicParsing -TimeoutSec 120 } catch {}
+          try { Invoke-WebRequest -Uri "${{ env.AME_WIZARD_URL }}" -OutFile "$atlasDir\AME_Wizard.exe" -UseBasicParsing -TimeoutSec 120 } catch {}
           $WshShell = New-Object -ComObject WScript.Shell
-          $shortcut = $WshShell.CreateShortcut("C:\Users\Public\Desktop\🔧 AtlasOS Setup.lnk")
+          $shortcut = $WshShell.CreateShortcut("C:\Users\Public\Desktop\AtlasOS Setup.lnk")
           $shortcut.TargetPath = "$atlasDir\AtlasPlaybook.exe"
           $shortcut.WorkingDirectory = $atlasDir
-          $shortcut.Description = "Launch AtlasOS Playbook Installer"
           $shortcut.Save()
 
-          # Create a README with instructions
-          @"
-          ╔══════════════════════════════════════════════════════╗
-          ║          AtlasOS Installation Guide                  ║
-          ╠══════════════════════════════════════════════════════╣
-          ║                                                      ║
-          ║  1. Double-click "AtlasPlaybook.exe"                 ║
-          ║  2. Follow the on-screen wizard                      ║
-          ║  3. Select your desired tweaks                       ║
-          ║  4. Click Apply and wait for completion              ║
-          ║  5. Reboot when prompted                             ║
-          ║                                                      ║
-          ║  If the playbook doesn't launch:                     ║
-          ║  → Run AME_Wizard.exe first, then load the playbook  ║
-          ║                                                      ║
-          ║  NOTE: This is Windows Server 2022, not Win 11.     ║
-          ║  Some AtlasOS tweaks may not apply correctly.        ║
-          ║  For full Win 11 support, use Mode B (qemu-vm).     ║
-          ║                                                      ║
-          ╚══════════════════════════════════════════════════════╝
-          "@ | Out-File "$atlasDir\README.txt" -Encoding ASCII
-
-          Write-Host "✅ AtlasOS toolkit ready at $atlasDir" -ForegroundColor Green
-          Get-ChildItem $atlasDir | Format-Table Name, Length, LastWriteTime
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 6 — Pre-configure Windows for AtlasOS prerequisites
-      # ──────────────────────────────────────────────────────────────────────
-      - name: "⚙️ Pre-Configure Windows (AtlasOS Prerequisites)"
+      - name: "⚙️ Pre-Configure Windows"
         shell: pwsh
         run: |
-          Write-Host "── Applying pre-installation tweaks ──" -ForegroundColor Green
-
-          # Disable Windows Defender real-time protection temporarily
-          # (AtlasOS recommends this during installation)
-          try {
-            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-            Write-Host "  ✅ Real-time monitoring disabled" -ForegroundColor Green
-          } catch {
-            Write-Host "  ⚠️ Could not disable real-time monitoring (may need reboot)" -ForegroundColor Yellow
-          }
-
-          # Disable Windows Update during session
+          try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}
           Stop-Service -Name "wuauserv" -Force -ErrorAction SilentlyContinue
           Set-Service -Name "wuauserv" -StartupType Disabled -ErrorAction SilentlyContinue
-          Write-Host "  ✅ Windows Update disabled for session" -ForegroundColor Green
-
-          # Set power plan to High Performance
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
-          Write-Host "  ✅ High Performance power plan set" -ForegroundColor Green
-
-          # Disable screen saver and sleep
           powercfg /change monitor-timeout-ac 0
           powercfg /change standby-timeout-ac 0
           powercfg /change hibernate-timeout-ac 0
-          Write-Host "  ✅ Sleep/hibernate disabled" -ForegroundColor Green
+          try { Install-WindowsFeature -Name NET-Framework-Features -ErrorAction SilentlyContinue } catch {}
 
-          # Enable .NET Framework 3.5 (some AtlasOS components need it)
-          try {
-            Install-WindowsFeature -Name NET-Framework-Features -ErrorAction SilentlyContinue
-            Write-Host "  ✅ .NET Framework features enabled" -ForegroundColor Green
-          } catch {
-            Write-Host "  ⚠️ .NET Framework feature install skipped" -ForegroundColor Yellow
-          }
-
-          Write-Host "✅ Pre-configuration complete" -ForegroundColor Green
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 7 — Launch tunnels and print connection info
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🚀 Start Tunnels & Display Connection Info"
         shell: pwsh
         run: |
-          Write-Host "`n════════════════════════════════════════════════════════════" -ForegroundColor Magenta
-          Write-Host "  🔑 CONNECTION INFORMATION — Copy these details!" -ForegroundColor Magenta
-          Write-Host "════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
-
           $username = "${{ github.event.inputs.rdp_user }}"
           $password = "${{ github.event.inputs.rdp_password }}"
-
-          # ── Start bore tunnel for RDP (port 3389) ──
-          Write-Host "── Starting bore TCP tunnel for RDP (port 3389) ──" -ForegroundColor Cyan
-
-          $boreLog = "C:\tools\bore_rdp.log"
-          $boreProc = Start-Process -FilePath "C:\tools\bore\bore.exe" `
-                                    -ArgumentList "local 3389 --to bore.pub" `
-                                    -RedirectStandardOutput $boreLog `
-                                    -RedirectStandardError "C:\tools\bore_rdp_err.log" `
-                                    -PassThru -NoNewWindow -WindowStyle Hidden
-
-          # Wait for tunnel to establish and extract the public address
+          Start-Process -FilePath "C:\tools\bore\bore.exe" -ArgumentList "local 3389 --to bore.pub" -RedirectStandardOutput "C:\tools\bore_rdp.log" -RedirectStandardError "C:\tools\bore_rdp_err.log" -PassThru -NoNewWindow -WindowStyle Hidden
           Start-Sleep -Seconds 8
-
           $boreOutput = ""
-          if (Test-Path $boreLog)     { $boreOutput += Get-Content $boreLog -Raw -ErrorAction SilentlyContinue }
+          if (Test-Path "C:\tools\bore_rdp.log") { $boreOutput += Get-Content "C:\tools\bore_rdp.log" -Raw -ErrorAction SilentlyContinue }
           if (Test-Path "C:\tools\bore_rdp_err.log") { $boreOutput += Get-Content "C:\tools\bore_rdp_err.log" -Raw -ErrorAction SilentlyContinue }
-
-          Write-Host "  Bore output: $boreOutput" -ForegroundColor DarkGray
-
-          # Parse the bore public address (format: "listening at bore.pub:XXXXX")
           $rdpAddress = "UNKNOWN"
-          if ($boreOutput -match 'bore\.pub:(\d+)') {
-            $rdpPort = $Matches[1]
-            $rdpAddress = "bore.pub:$rdpPort"
-          } elseif ($boreOutput -match '(\d+\.\d+\.\d+\.\d+):(\d+)') {
-            $rdpAddress = "$($Matches[1]):$($Matches[2])"
-          }
-
-          # ── Start cloudflared quick tunnel for HTTP (bonus) ──
-          Write-Host "── Starting cloudflared HTTP tunnel (bonus) ──" -ForegroundColor Cyan
-
-          # Start a simple HTTP file server on port 8080 for file sharing
-          Start-Process -FilePath "powershell" `
-                        -ArgumentList "-Command", "& { `$listener = New-Object System.Net.HttpListener; `$listener.Prefixes.Add('http://+:8080/'); `$listener.Start(); while (`$listener.IsListening) { `$ctx = `$listener.GetContext(); `$resp = `$ctx.Response; `$body = [System.Text.Encoding]::UTF8.GetBytes('Windows Cloud PC is running. Connect via RDP.'); `$resp.OutputStream.Write(`$body, 0, `$body.Length); `$resp.Close() } }" `
-                        -WindowStyle Hidden -ErrorAction SilentlyContinue
-
-          $cfLog = "C:\tools\cf_tunnel.log"
-          $cfProc = Start-Process -FilePath "C:\tools\cloudflared.exe" `
-                                  -ArgumentList "tunnel --url http://localhost:8080" `
-                                  -RedirectStandardOutput "C:\tools\cf_out.log" `
-                                  -RedirectStandardError $cfLog `
-                                  -PassThru -NoNewWindow -WindowStyle Hidden
-
+          if ($boreOutput -match 'bore\.pub:(\d+)') { $rdpAddress = "bore.pub:$($Matches[1])" }
+          Start-Process -FilePath "powershell" -ArgumentList "-Command", "& { `$listener = New-Object System.Net.HttpListener; `$listener.Prefixes.Add('http://+:8080/'); `$listener.Start(); while (`$listener.IsListening) { `$ctx = `$listener.GetContext(); `$resp = `$ctx.Response; `$body = [System.Text.Encoding]::UTF8.GetBytes('Windows Cloud PC is running. Connect via RDP.'); `$resp.OutputStream.Write(`$body, 0, `$body.Length); `$resp.Close() } }" -WindowStyle Hidden -ErrorAction SilentlyContinue
+          Start-Process -FilePath "C:\tools\cloudflared.exe" -ArgumentList "tunnel --url http://localhost:8080" -RedirectStandardOutput "C:\tools\cf_out.log" -RedirectStandardError "C:\tools\cf_tunnel.log" -PassThru -NoNewWindow -WindowStyle Hidden
           Start-Sleep -Seconds 10
-
           $cfOutput = ""
-          if (Test-Path $cfLog) { $cfOutput = Get-Content $cfLog -Raw -ErrorAction SilentlyContinue }
-
+          if (Test-Path "C:\tools\cf_tunnel.log") { $cfOutput = Get-Content "C:\tools\cf_tunnel.log" -Raw -ErrorAction SilentlyContinue }
           $httpUrl = "N/A"
-          if ($cfOutput -match 'https://[a-z0-9-]+\.trycloudflare\.com') {
-            $httpUrl = $Matches[0]
-          }
+          if ($cfOutput -match 'https://[a-z0-9-]+\.trycloudflare\.com') { $httpUrl = $Matches[0] }
+          Write-Host "RDP Address: $rdpAddress"
+          Write-Host "Username: $username"
+          Write-Host "Password: $password"
+          Write-Host "HTTP Status Page: $httpUrl"
 
-          # ── Print connection details ──
-          Write-Host ""
-          Write-Host "┌──────────────────────────────────────────────────────────┐" -ForegroundColor Green
-          Write-Host "│           🖥️  RDP CONNECTION DETAILS                    │" -ForegroundColor Green
-          Write-Host "├──────────────────────────────────────────────────────────┤" -ForegroundColor Green
-          Write-Host "│                                                          │" -ForegroundColor White
-          Write-Host "│  Address:    $rdpAddress" -ForegroundColor Yellow
-          Write-Host "│  Username:   $username" -ForegroundColor White
-          Write-Host "│  Password:   $password" -ForegroundColor White
-          Write-Host "│                                                          │" -ForegroundColor White
-          Write-Host "│  Connect via:                                            │" -ForegroundColor Cyan
-          Write-Host "│    Windows:  mstsc /v:$rdpAddress" -ForegroundColor Cyan
-          Write-Host "│    macOS:    Microsoft Remote Desktop app" -ForegroundColor Cyan
-          Write-Host "│    Linux:    remmina or xfreerdp /v:$rdpAddress" -ForegroundColor Cyan
-          Write-Host "│                                                          │" -ForegroundColor White
-          Write-Host "├──────────────────────────────────────────────────────────┤" -ForegroundColor Green
-          Write-Host "│  🌐 HTTP Status Page: $httpUrl" -ForegroundColor Magenta
-          Write-Host "└──────────────────────────────────────────────────────────┘" -ForegroundColor Green
-          Write-Host ""
-
-          # Also write to a file for easy access
-          @"
-          ══════════════════════════════════════════
-            CONNECTION DETAILS
-          ══════════════════════════════════════════
-          RDP Address : $rdpAddress
-          Username    : $username
-          Password    : $password
-          HTTP Status : $httpUrl
-          ══════════════════════════════════════════
-          "@ | Out-File "C:\tools\CONNECTION.txt" -Encoding ASCII
-
-          # Verify RDP is listening
-          Write-Host "── Verifying RDP service ──" -ForegroundColor Cyan
-          Get-NetTCPConnection -LocalPort 3389 -ErrorAction SilentlyContinue | Format-Table LocalAddress, LocalPort, State
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 8 — Keep-alive loop (main session)
-      # ──────────────────────────────────────────────────────────────────────
       - name: "⏱️ Keep-Alive Session (${{ github.event.inputs.duration_hours }}h)"
         shell: pwsh
         run: |
-          $totalHours   = [int]"${{ github.event.inputs.duration_hours }}"
+          $totalHours = [int]"${{ github.event.inputs.duration_hours }}"
           $totalSeconds = $totalHours * 3600
-          $elapsed      = 0
-          $interval     = 60   # heartbeat every 60 seconds
-
-          Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "  ⏱️  Keep-Alive: $totalHours hours ($totalSeconds seconds)" -ForegroundColor Cyan
-          Write-Host "  The tunnel and RDP will remain active." -ForegroundColor Cyan
-          Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
-
+          $elapsed = 0
           while ($elapsed -lt $totalSeconds) {
-            $remaining = $totalSeconds - $elapsed
-            $hoursLeft   = [math]::Floor($remaining / 3600)
-            $minutesLeft = [math]::Floor(($remaining % 3600) / 60)
-
-            # Heartbeat with system stats
-            $cpu  = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
-            $mem  = Get-CimInstance Win32_OperatingSystem
-            $memUsed = [math]::Round(($mem.TotalVisibleMemorySize - $mem.FreePhysicalMemory) / $mem.TotalVisibleMemorySize * 100, 1)
-
-            $timestamp = Get-Date -Format "HH:mm:ss"
-            Write-Host "[$timestamp] ⏳ ${hoursLeft}h ${minutesLeft}m remaining | CPU: ${cpu}% | RAM: ${memUsed}%" -ForegroundColor DarkCyan
-
-            # Check if bore is still running; restart if dead
-            $boreRunning = Get-Process -Name "bore" -ErrorAction SilentlyContinue
-            if (-not $boreRunning) {
-              Write-Host "  ⚠️ bore process died — restarting..." -ForegroundColor Yellow
-              Start-Process -FilePath "C:\tools\bore\bore.exe" `
-                            -ArgumentList "local 3389 --to bore.pub" `
-                            -RedirectStandardOutput "C:\tools\bore_rdp.log" `
-                            -RedirectStandardError "C:\tools\bore_rdp_err.log" `
-                            -NoNewWindow -WindowStyle Hidden
-              Write-Host "  ✅ bore restarted (NOTE: public address will change!)" -ForegroundColor Yellow
-            }
-
-            Start-Sleep -Seconds $interval
-            $elapsed += $interval
+            Start-Sleep -Seconds 60
+            $elapsed += 60
+            Write-Host "Keep-alive: $elapsed / $totalSeconds"
           }
 
-          Write-Host "`n🏁 Session complete. Environment will be destroyed.`n" -ForegroundColor Red
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 9 — Cleanup (runs even on cancellation)
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🧹 Cleanup"
         if: always()
         shell: pwsh
         run: |
-          Write-Host "── Cleaning up ──" -ForegroundColor Yellow
           Stop-Process -Name "bore" -Force -ErrorAction SilentlyContinue
           Stop-Process -Name "cloudflared" -Force -ErrorAction SilentlyContinue
-          Remove-Item "C:\tools\CONNECTION.txt" -Force -ErrorAction SilentlyContinue
-          Write-Host "✅ Cleanup complete" -ForegroundColor Green
 
-
-  # ==========================================================================
-  #  JOB 2  ·  QEMU VM MODE  (Genuine Windows 11 Pro)
-  # ==========================================================================
   qemu-vm-mode:
     name: "Mode B · QEMU Windows 11 VM + RDP Tunnel"
     if: ${{ github.event.inputs.mode == 'qemu-vm' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     steps:
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 1 — Install QEMU and dependencies
-      # ──────────────────────────────────────────────────────────────────────
       - name: "📦 Install QEMU + Tools"
         run: |
-          echo "═══════════════════════════════════════════════════"
-          echo "  Windows 11 VM · QEMU/KVM Mode"
-          echo "═══════════════════════════════════════════════════"
-
           sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            qemu-system-x86 \
-            qemu-utils \
-            ovmf \
-            swtpm \
-            wget \
-            curl \
-            unzip \
-            netcat-openbsd \
-            dnsutils \
-            git \
-            python3-numpy \
-            python3-websockify
-
-          # Verify KVM support
-          if [ -e /dev/kvm ]; then
-            echo "✅ KVM acceleration available"
-            sudo chmod 666 /dev/kvm
-          else
-            echo "⚠️  No KVM — VM will run in TCG (slow) mode"
-          fi
-
-          # Install bore tunnel
-          echo "── Installing bore ──"
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils ovmf swtpm wget curl unzip netcat-openbsd dnsutils git python3-numpy python3-websockify p7zip-full
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
           BORE_URL="https://github.com/ekzhang/bore/releases/download/v${BORE_VERSION}/bore-v${BORE_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           mkdir -p /tmp/bore
-          wget -q "$BORE_URL" -O /tmp/bore/bore.tar.gz || {
-            echo "⚠️ bore download failed, trying alternative URL..."
-            wget -q "https://github.com/ekzhang/bore/releases/latest/download/bore-v${BORE_VERSION}-x86_64-unknown-linux-musl.tar.gz" -O /tmp/bore/bore.tar.gz
-          }
+          wget -q "$BORE_URL" -O /tmp/bore/bore.tar.gz || wget -q "https://github.com/ekzhang/bore/releases/latest/download/bore-v${BORE_VERSION}-x86_64-unknown-linux-musl.tar.gz" -O /tmp/bore/bore.tar.gz
           tar xzf /tmp/bore/bore.tar.gz -C /tmp/bore/ 2>/dev/null || true
-          # Find bore binary
           BORE_BIN=$(find /tmp/bore -name "bore" -type f | head -1)
-          if [ -z "$BORE_BIN" ]; then
-            # Try cargo install as fallback
-            echo "⚠️ bore binary not found in archive, installing via cargo..."
-            # Actually let's just use a simpler approach - direct binary
-            wget -q "https://github.com/ekzhang/bore/releases/download/v${BORE_VERSION}/bore-v${BORE_VERSION}-x86_64-unknown-linux-musl.tar.gz" -O /tmp/bore.tar.gz
-            cd /tmp && tar xzf bore.tar.gz 2>/dev/null || true
-            BORE_BIN=$(find /tmp -name "bore" -type f -executable | head -1)
-          fi
-          if [ -n "$BORE_BIN" ]; then
-            chmod +x "$BORE_BIN"
-            sudo cp "$BORE_BIN" /usr/local/bin/bore
-            echo "✅ bore installed: $(bore --version 2>/dev/null || echo 'ok')"
-          else
-            echo "❌ Could not install bore"
-            exit 1
-          fi
-
-          # Install cloudflared
-          echo "── Installing cloudflared ──"
+          if [ -n "$BORE_BIN" ]; then chmod +x "$BORE_BIN"; sudo cp "$BORE_BIN" /usr/local/bin/bore; else exit 1; fi
           wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" -O /usr/local/bin/cloudflared
           chmod +x /usr/local/bin/cloudflared
-          echo "✅ cloudflared installed"
-
-          # ── Install noVNC (web-based VNC client — access Windows desktop in browser) ──
-          echo "── Installing noVNC (Web Desktop) ──"
           git clone --depth 1 https://github.com/novnc/noVNC.git /tmp/novnc 2>/dev/null
           git clone --depth 1 https://github.com/novnc/websockify.git /tmp/novnc/utils/websockify 2>/dev/null
           chmod +x /tmp/novnc/utils/novnc_proxy 2>/dev/null || true
-
-          # Create a custom index page that auto-connects and redirects to vnc.html
           cat > /tmp/novnc/index.html << 'NOVNC_INDEX_EOF'
-          <!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Windows 11 Cloud PC · AtlasOS</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body {
-                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-                background: linear-gradient(135deg, #0078D4 0%, #005A9E 50%, #003F6E 100%);
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                color: white;
-                padding: 20px;
-              }
-              .container {
-                max-width: 600px;
-                text-align: center;
-                background: rgba(0,0,0,0.3);
-                border-radius: 16px;
-                padding: 40px;
-                backdrop-filter: blur(10px);
-                border: 1px solid rgba(255,255,255,0.1);
-              }
-              h1 { font-size: 2em; margin-bottom: 8px; }
-              .subtitle { opacity: 0.8; margin-bottom: 30px; font-size: 1.1em; }
-              .btn {
-                display: inline-block;
-                padding: 16px 40px;
-                font-size: 1.2em;
-                font-weight: 600;
-                color: #0078D4;
-                background: white;
-                border: none;
-                border-radius: 8px;
-                cursor: pointer;
-                text-decoration: none;
-                transition: all 0.2s;
-                margin: 10px;
-              }
-              .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
-              .btn-secondary {
-                background: transparent;
-                color: white;
-                border: 2px solid rgba(255,255,255,0.5);
-              }
-              .info {
-                margin-top: 30px;
-                text-align: left;
-                background: rgba(0,0,0,0.2);
-                border-radius: 8px;
-                padding: 20px;
-                font-size: 0.9em;
-                line-height: 1.8;
-              }
-              .info code {
-                background: rgba(255,255,255,0.15);
-                padding: 2px 8px;
-                border-radius: 4px;
-                font-family: 'Cascadia Code', 'Consolas', monospace;
-              }
-              .badge {
-                display: inline-block;
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 0.75em;
-                font-weight: 600;
-                background: rgba(255,255,255,0.15);
-                margin: 2px;
-              }
-              .status {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-                margin: 15px 0;
-              }
-              .dot {
-                width: 10px; height: 10px;
-                border-radius: 50%;
-                background: #4CAF50;
-                animation: pulse 2s infinite;
-              }
-              @keyframes pulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.4; }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <h1>🖥️ Windows 11 Cloud PC</h1>
-              <p class="subtitle">AtlasOS Ready · GitHub Actions</p>
-
-              <div class="status">
-                <div class="dot"></div>
-                <span>VM Running</span>
-              </div>
-
-              <div style="margin: 20px 0;">
-                <span class="badge">Windows 11 25H2</span>
-                <span class="badge">x64</span>
-                <span class="badge">AtlasOS Ready</span>
-              </div>
-
-              <a href="vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000" class="btn">
-                🖥️ Open Desktop
-              </a>
-              <a href="vnc.html" class="btn btn-secondary">
-                ⚙️ Connect (Manual)
-              </a>
-
-              <div class="info">
-                <strong>📋 Quick Guide:</strong><br>
-                • Click <strong>Open Desktop</strong> to view Windows 11 in your browser<br>
-                • Use <code>Ctrl+Alt+Delete</code> via the noVNC sidebar (left edge)<br>
-                • For best experience, use <strong>fullscreen mode</strong> (F11)<br>
-                • AtlasOS tools are at <code>C:\AtlasOS\</code> on the desktop<br>
-                • If the screen is black, Windows may still be installing — wait a few minutes
-              </div>
-            </div>
-          </body>
-          </html>
+          <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Windows 11 Cloud PC · AtlasOS</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Segoe UI,system-ui,sans-serif;background:linear-gradient(135deg,#0078D4 0%,#005A9E 50%,#003F6E 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;color:#fff;padding:20px}.container{max-width:640px;text-align:center;background:rgba(0,0,0,.3);border-radius:16px;padding:40px;backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1)}.btn{display:inline-block;padding:16px 40px;font-size:1.1em;font-weight:600;color:#0078D4;background:#fff;border:none;border-radius:8px;text-decoration:none;margin:10px}</style></head><body><div class="container"><h1>Windows 11 Cloud PC</h1><p>AtlasOS Ready · GitHub Actions</p><a href="vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000" class="btn">Open Desktop</a></div></body></html>
           NOVNC_INDEX_EOF
 
-          echo "✅ noVNC web desktop installed"
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 2 — Create virtual disk and download Windows 11 ISO
-      # ──────────────────────────────────────────────────────────────────────
       - name: "💿 Create VM Disk & Download Windows 11 ISO"
         run: |
           mkdir -p /tmp/win11vm
-
-          # Create a 64 GB QCOW2 virtual disk
-          echo "── Creating 64 GB virtual disk ──"
           qemu-img create -f qcow2 /tmp/win11vm/disk.qcow2 64G
-          echo "✅ Disk created"
-
-          # ── Determine ISO URL ──
-          # Priority: workflow input > repository secret > built-in fallback
           ISO_URL="${{ github.event.inputs.win11_iso_url }}"
-
-          # If the user left the default (empty or placeholder), try secret
           if [ -z "$ISO_URL" ] || [ "$ISO_URL" = "paste-your-iso-url-here" ]; then
-            if [ -n "${{ secrets.WIN11_ISO_URL }}" ]; then
-              ISO_URL="${{ secrets.WIN11_ISO_URL }}"
-              echo "  Using ISO URL from repository secret WIN11_ISO_URL"
-            fi
+            if [ -n "${{ secrets.WIN11_ISO_URL }}" ]; then ISO_URL="${{ secrets.WIN11_ISO_URL }}"; fi
           fi
-
           if [ -z "$ISO_URL" ]; then
-            echo "❌ No Windows 11 ISO URL provided!"
-            echo ""
-            echo "   Please provide a valid URL via:"
-            echo "   1. Workflow input 'win11_iso_url' (paste when clicking Run workflow)"
-            echo "   2. Repository secret WIN11_ISO_URL"
-            echo ""
-            echo "   Get a fresh link from:"
-            echo "   • https://www.microsoft.com/software-download/windows11"
-            echo "   • https://uupdump.net"
-            echo ""
-            echo "   ⚠️  Microsoft ISO links expire! Always use a fresh URL."
-            exit 1
+            echo "No Windows 11 ISO URL provided"; exit 1
           fi
-
-          echo "── Downloading Windows 11 ISO ──"
-          echo "  URL: ${ISO_URL:0:80}..."
-          echo "  (This is a ~5-6 GB download, please wait...)"
-          echo ""
-
-          # Use curl with robust settings for large file downloads:
-          #   -L          : follow redirects (Microsoft uses 302 redirects)
-          #   --retry 3   : retry up to 3 times on transient failures
-          #   --retry-delay 5 : wait 5s between retries
-          #   -C -        : resume partial downloads if possible
-          #   -#          : progress bar
-          #   -H User-Agent : Microsoft blocks some automated requests without this
-          #   --connect-timeout 30 : fail fast if server unreachable
-          #   --max-time 3600 : 1 hour max download time
-
-          curl -L \
-            --retry 3 \
-            --retry-delay 5 \
-            --retry-connrefused \
-            -C - \
-            -# \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
-            -H "Accept: */*" \
-            --connect-timeout 30 \
-            --max-time 3600 \
-            -o /tmp/win11vm/win11.iso \
-            "$ISO_URL"
-
-          # Verify download
-          if [ ! -f /tmp/win11vm/win11.iso ]; then
-            echo "❌ ISO download failed — file not found"
-            exit 1
-          fi
-
+          curl -L --retry 3 --retry-delay 5 --retry-connrefused -C - -# -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" -H "Accept: */*" --connect-timeout 30 --max-time 3600 -o /tmp/win11vm/win11.iso "$ISO_URL"
+          if [ ! -f /tmp/win11vm/win11.iso ]; then echo "ISO download failed"; exit 1; fi
           ISO_SIZE=$(stat -c%s /tmp/win11vm/win11.iso 2>/dev/null || stat -f%z /tmp/win11vm/win11.iso 2>/dev/null)
           ISO_SIZE_MB=$((ISO_SIZE / 1024 / 1024))
-
-          # Check 1: File size should be in expected range for Windows 11 (4-8 GB)
-          if [ "$ISO_SIZE" -lt 4000000000 ]; then
-            echo "❌ ISO file is only ${ISO_SIZE_MB}MB — too small for Windows 11."
-            echo "   A valid Windows 11 ISO should be 4000-8000 MB."
-            echo "   The download may be truncated or the URL may have expired."
-            echo ""
-            echo "   First 500 bytes of file:"
-            head -c 500 /tmp/win11vm/win11.iso | strings | head -10
-            echo ""
-            echo "   ❌ Please provide a fresh, valid Microsoft ISO URL."
-            exit 1
-          fi
-
-          # Check 2: Verify ISO 9660 signature at offset 0x8001 (32769)
-          # Valid ISO 9660 images have "CD001" at this offset
+          if [ "$ISO_SIZE" -lt 4000000000 ]; then echo "ISO too small: ${ISO_SIZE_MB}MB"; exit 1; fi
           ISO_SIGNATURE=$(dd if=/tmp/win11vm/win11.iso bs=1 skip=32769 count=5 2>/dev/null)
-          if [ "$ISO_SIGNATURE" != "CD001" ]; then
-            echo "❌ ISO file does not have valid ISO 9660 signature."
-            echo "   Expected 'CD001' at offset 0x8001, got: '$ISO_SIGNATURE'"
-            echo "   File size: ${ISO_SIZE_MB} MB"
-            echo ""
-            echo "   This file is not a valid ISO 9660 image."
-            echo "   The download may be corrupted or the URL returned an error page."
-            echo ""
-            echo "   First 200 bytes of file:"
-            head -c 200 /tmp/win11vm/win11.iso | strings | head -10
-            echo ""
-            echo "   ❌ Please provide a fresh, valid Microsoft ISO URL."
-            exit 1
-          fi
-
-          echo "  ✅ ISO 9660 signature verified (CD001)"
-          echo ""
+          if [ "$ISO_SIGNATURE" != "CD001" ]; then echo "Invalid ISO9660 signature: $ISO_SIGNATURE"; exit 1; fi
+          ISO_PATHS="$(7z l -slt /tmp/win11vm/win11.iso 2>/dev/null | awk -F' = ' '/^Path = /{print $2}' | tr '\\' '/')"
+          required_paths=("setup.exe" "bootmgr" "sources/boot.wim" "EFI/BOOT/BOOTX64.EFI" "EFI/Microsoft/Boot/BCD")
+          for p in "${required_paths[@]}"; do
+            if ! printf '%s\n' "$ISO_PATHS" | grep -qiE "(^|/)$p$"; then
+              echo "Missing required path in ISO: $p"
+              exit 1
+            fi
+          done
           ls -lh /tmp/win11vm/
-          echo "✅ Windows 11 ISO ready (${ISO_SIZE_MB} MB)"
+          echo "✅ Windows 11 ISO verified (${ISO_SIZE_MB} MB)"
 
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 3 — Create autounattend.xml for unattended setup
-      # ──────────────────────────────────────────────────────────────────────
       - name: "📝 Create Autounattend.xml (Automated OOBE)"
         run: |
           USERNAME="${{ github.event.inputs.rdp_user }}"
           PASSWORD="${{ github.event.inputs.rdp_password }}"
-
           cat > /tmp/win11vm/autounattend.xml << 'AUTOUNATTEND_EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <unattend xmlns="urn:schemas-microsoft-com:unattend"
-                    xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-
+          <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
             <settings pass="windowsPE">
-              <component name="Microsoft-Windows-International-Core-WinPE"
-                         processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
-                         language="neutral" versionScope="nonSxS">
+              <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
                 <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
-                <InputLocale>en-US</InputLocale>
-                <SystemLocale>en-US</SystemLocale>
-                <UILanguage>en-US</UILanguage>
-                <UserLocale>en-US</UserLocale>
+                <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
               </component>
-              <component name="Microsoft-Windows-Setup"
-                         processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
-                         language="neutral" versionScope="nonSxS">
+              <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
                 <DiskConfiguration>
-                  <Disk wcm:action="add">
-                    <DiskID>0</DiskID>
-                    <WillWipeDisk>true</WillWipeDisk>
+                  <Disk wcm:action="add"><DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk>
                     <CreatePartitions>
-                      <CreatePartition wcm:action="add">
-                        <Order>1</Order>
-                        <Type>EFI</Type>
-                        <Size>300</Size>
-                      </CreatePartition>
-                      <CreatePartition wcm:action="add">
-                        <Order>2</Order>
-                        <Type>MSR</Type>
-                        <Size>16</Size>
-                      </CreatePartition>
-                      <CreatePartition wcm:action="add">
-                        <Order>3</Order>
-                        <Type>Primary</Type>
-                        <Extend>true</Extend>
-                      </CreatePartition>
+                      <CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>300</Size></CreatePartition>
+                      <CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>16</Size></CreatePartition>
+                      <CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>
                     </CreatePartitions>
                     <ModifyPartitions>
-                      <ModifyPartition wcm:action="add">
-                        <Order>1</Order>
-                        <PartitionID>1</PartitionID>
-                        <Format>FAT32</Format>
-                      </ModifyPartition>
-                      <ModifyPartition wcm:action="add">
-                        <Order>2</Order>
-                        <PartitionID>3</PartitionID>
-                        <Format>NTFS</Format>
-                        <Letter>C</Letter>
-                      </ModifyPartition>
+                      <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format></ModifyPartition>
+                      <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Letter>C</Letter></ModifyPartition>
                     </ModifyPartitions>
                   </Disk>
                 </DiskConfiguration>
-                <ImageInstall>
-                  <OSImage>
-                    <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
-                  </OSImage>
-                </ImageInstall>
-                <UserData>
-                  <AcceptEula>true</AcceptEula>
-                  <FullName>AtlasOS User</FullName>
-                  <Organization>AtlasOS</Organization>
-                  <ProductKey>
-                    <!-- Generic KMS key for Windows 11 Pro (activates against KMS, not retail) -->
-                    <Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key>
-                  </ProductKey>
-                </UserData>
-                <!-- Bypass TPM 2.0 + Secure Boot + RAM checks for QEMU -->
+                <ImageInstall><OSImage><InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo></OSImage></ImageInstall>
+                <UserData><AcceptEula>true</AcceptEula><FullName>AtlasOS User</FullName><Organization>AtlasOS</Organization><ProductKey><Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key></ProductKey></UserData>
                 <RunSynchronous>
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>1</Order>
-                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
-                  </RunSynchronousCommand>
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>2</Order>
-                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
-                  </RunSynchronousCommand>
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>3</Order>
-                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
-                  </RunSynchronousCommand>
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>4</Order>
-                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
-                  </RunSynchronousCommand>
+                  <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+                  <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+                  <RunSynchronousCommand wcm:action="add"><Order>3</Order><Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+                  <RunSynchronousCommand wcm:action="add"><Order>4</Order><Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
                 </RunSynchronous>
               </component>
             </settings>
-
             <settings pass="specialize">
-              <component name="Microsoft-Windows-Shell-Setup"
-                         processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
-                         language="neutral" versionScope="nonSxS">
-                <ComputerName>AtlasOS-Cloud</ComputerName>
-                <TimeZone>UTC</TimeZone>
+              <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+                <ComputerName>AtlasOS-Cloud</ComputerName><TimeZone>UTC</TimeZone>
               </component>
-              <component name="Microsoft-Windows-TerminalServices-LocalSessionManager"
-                         processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
-                         language="neutral" versionScope="nonSxS">
+              <component name="Microsoft-Windows-TerminalServices-LocalSessionManager" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
                 <fDenyTSConnections>false</fDenyTSConnections>
               </component>
-              <component name="Networking-MPSSVC-Svc"
-                         processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
-                         language="neutral" versionScope="nonSxS">
-                <FirewallGroups>
-                  <FirewallGroup wcm:action="add" wcm:keyValue="RemoteDesktop">
-                    <Active>true</Active>
-                    <Group>Remote Desktop</Group>
-                    <Profile>all</Profile>
-                  </FirewallGroup>
-                </FirewallGroups>
-              </component>
             </settings>
-
             <settings pass="oobeSystem">
-              <component name="Microsoft-Windows-Shell-Setup"
-                         processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
-                         language="neutral" versionScope="nonSxS">
-                <UserAccounts>
-                  <LocalAccounts>
-                    <LocalAccount wcm:action="add">
-                      <Name>ATLAS_USER_PLACEHOLDER</Name>
-                      <Group>Administrators</Group>
-                      <Password>
-                        <Value>ATLAS_PASS_PLACEHOLDER</Value>
-                        <PlainText>true</PlainText>
-                      </Password>
-                      <DisplayName>AtlasOS Admin</DisplayName>
-                      <Description>Remote admin for AtlasOS</Description>
-                    </LocalAccount>
-                  </LocalAccounts>
-                </UserAccounts>
-                <AutoLogon>
-                  <Username>ATLAS_USER_PLACEHOLDER</Username>
-                  <Enabled>true</Enabled>
-                  <Password>
-                    <Value>ATLAS_PASS_PLACEHOLDER</Value>
-                    <PlainText>true</PlainText>
-                  </Password>
-                  <LogonCount>999</LogonCount>
-                </AutoLogon>
-                <OOBE>
-                  <HideEULAPage>true</HideEULAPage>
-                  <HideLocalAccountScreen>true</HideLocalAccountScreen>
-                  <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-                  <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-                  <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-                  <ProtectYourPC>3</ProtectYourPC>
-                  <SkipMachineOOBE>true</SkipMachineOOBE>
-                  <SkipUserOOBE>true</SkipUserOOBE>
-                </OOBE>
+              <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+                <UserAccounts><LocalAccounts><LocalAccount wcm:action="add"><Name>ATLAS_USER_PLACEHOLDER</Name><Group>Administrators</Group><Password><Value>ATLAS_PASS_PLACEHOLDER</Value><PlainText>true</PlainText></Password><DisplayName>AtlasOS Admin</DisplayName></LocalAccount></LocalAccounts></UserAccounts>
+                <AutoLogon><Username>ATLAS_USER_PLACEHOLDER</Username><Enabled>true</Enabled><Password><Value>ATLAS_PASS_PLACEHOLDER</Value><PlainText>true</PlainText></Password><LogonCount>999</LogonCount></AutoLogon>
+                <OOBE><HideEULAPage>true</HideEULAPage><HideLocalAccountScreen>true</HideLocalAccountScreen><HideOEMRegistrationScreen>true</HideOEMRegistrationScreen><HideOnlineAccountScreens>true</HideOnlineAccountScreens><HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE><ProtectYourPC>3</ProtectYourPC><SkipMachineOOBE>true</SkipMachineOOBE><SkipUserOOBE>true</SkipUserOOBE></OOBE>
                 <FirstLogonCommands>
-                  <!-- Enable RDP -->
-                  <SynchronousCommand wcm:action="add">
-                    <Order>1</Order>
-                    <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine>
-                  </SynchronousCommand>
-                  <SynchronousCommand wcm:action="add">
-                    <Order>2</Order>
-                    <CommandLine>cmd /c netsh advfirewall firewall set rule group="remote desktop" new enable=Yes</CommandLine>
-                  </SynchronousCommand>
-                  <!-- Download AtlasOS tools -->
-                  <SynchronousCommand wcm:action="add">
-                    <Order>3</Order>
-                    <CommandLine>cmd /c mkdir C:\AtlasOS</CommandLine>
-                  </SynchronousCommand>
-                  <SynchronousCommand wcm:action="add">
-                    <Order>4</Order>
-                    <CommandLine>powershell -Command "Invoke-WebRequest -Uri 'https://github.com/Atlas-OS/Atlas/releases/latest/download/AtlasPlaybook.exe' -OutFile 'C:\AtlasOS\AtlasPlaybook.exe'"</CommandLine>
-                  </SynchronousCommand>
-                  <SynchronousCommand wcm:action="add">
-                    <Order>5</Order>
-                    <CommandLine>powershell -Command "Invoke-WebRequest -Uri 'https://dl.ameliorated.io/AME%%20Wizard.exe' -OutFile 'C:\AtlasOS\AME_Wizard.exe'"</CommandLine>
-                  </SynchronousCommand>
-                  <!-- Create desktop shortcut -->
-                  <SynchronousCommand wcm:action="add">
-                    <Order>6</Order>
-                    <CommandLine>powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('C:\Users\Public\Desktop\AtlasOS Setup.lnk'); $s.TargetPath = 'C:\AtlasOS\AtlasPlaybook.exe'; $s.Save()"</CommandLine>
-                  </SynchronousCommand>
+                  <SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine></SynchronousCommand>
+                  <SynchronousCommand wcm:action="add"><Order>2</Order><CommandLine>cmd /c netsh advfirewall firewall set rule group="remote desktop" new enable=Yes</CommandLine></SynchronousCommand>
+                  <SynchronousCommand wcm:action="add"><Order>3</Order><CommandLine>cmd /c mkdir C:\AtlasOS</CommandLine></SynchronousCommand>
                 </FirstLogonCommands>
               </component>
             </settings>
           </unattend>
           AUTOUNATTEND_EOF
-
-          # Replace placeholders with actual values
           sed -i "s/ATLAS_USER_PLACEHOLDER/$USERNAME/g" /tmp/win11vm/autounattend.xml
           sed -i "s|ATLAS_PASS_PLACEHOLDER|$PASSWORD|g" /tmp/win11vm/autounattend.xml
 
-          echo "✅ autounattend.xml created"
-          cat /tmp/win11vm/autounattend.xml | head -20
-          echo "..."
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 4 — Create virtio drivers ISO (for better VM performance)
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🔧 Prepare VirtIO Drivers"
         run: |
-          echo "── Downloading VirtIO drivers ISO ──"
-          wget -q --show-progress \
-            "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso" \
-            -O /tmp/win11vm/virtio.iso 2>&1 || {
-            echo "⚠️  VirtIO download failed — VM will use IDE emulation (slower)"
-            touch /tmp/win11vm/virtio.iso
-          }
+          wget -q --show-progress "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso" -O /tmp/win11vm/virtio.iso 2>&1 || touch /tmp/win11vm/virtio.iso
           ls -lh /tmp/win11vm/virtio.iso
 
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 5 — Launch QEMU Windows 11 VM
-      #
-      #  Changes from the original broken config:
-      #    1. pflash (OVMF_CODE + OVMF_VARS) replaces -bios
-      #       → -bios loads OVMF as ROM; NVRAM volatile; boot entries lost on reboot
-      #    2. Removed if=virtio from system disk
-      #       → virtio.iso downloaded in Step 4 but NEVER attached as -drive
-      #       → Windows 11 has no built-in viostor driver
-      #       → autounattend.xml has no <DriverPaths> element
-      #       → Result: disk invisible to Setup, nothing installed, reboot→Shell
-      #    3. Added format=raw to CD-ROM drive
-      #       → Prevents QEMU format probing on the ISO file
-      #    4. Added -boot order=d
-      #       → Ensures first boot from DVD; NVRAM takes over after install
-      #    5. tpm-crb replaces tpm-tis
-      #       → Microsoft-recommended TPM interface for Windows 11
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🖥️ Boot Windows 11 VM"
         run: |
-          echo "═══════════════════════════════════════════════════"
-          echo "  🚀 Launching Windows 11 VM via QEMU"
-          echo "═══════════════════════════════════════════════════"
-
-          # ── Create autounattend floppy image ──
           sudo apt-get install -y -qq mtools dosfstools
           dd if=/dev/zero of=/tmp/win11vm/autounattend.img bs=1M count=2
           mkfs.vfat /tmp/win11vm/autounattend.img
           mcopy -i /tmp/win11vm/autounattend.img /tmp/win11vm/autounattend.xml ::
 
-          # ── Determine acceleration ──
           ACCEL="tcg"
-          if [ -e /dev/kvm ]; then
-            ACCEL="kvm"
-            echo "  Using KVM acceleration"
-          else
-            echo "  Using TCG (software emulation — SLOW)"
-            echo "  ⚠️  Windows 11 installation may take 30-60+ minutes without KVM"
-          fi
+          if [ -e /dev/kvm ]; then ACCEL="kvm"; fi
 
-          # ── Locate OVMF firmware files (paths vary by Ubuntu version) ──
           OVMF_CODE=""
           OVMF_VARS=""
-
-          # Try standard Ubuntu ovmf package paths (uppercase /usr/share/OVMF/)
-          for code_candidate in \
-            /usr/share/OVMF/OVMF_CODE.fd \
-            /usr/share/OVMF/OVMF_CODE_4M.fd \
-            /usr/share/edk2/ovmf/OVMF_CODE.fd \
-            /usr/share/qemu/OVMF.fd \
-          ; do
-            if [ -f "$code_candidate" ]; then
-              OVMF_CODE="$code_candidate"
-              break
-            fi
+          for code_candidate in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/qemu/OVMF.fd ; do
+            [ -f "$code_candidate" ] && { OVMF_CODE="$code_candidate"; break; }
           done
-
-          for vars_candidate in \
-            /usr/share/OVMF/OVMF_VARS.fd \
-            /usr/share/OVMF/OVMF_VARS_4M.fd \
-            /usr/share/edk2/ovmf/OVMF_VARS.fd \
-          ; do
-            if [ -f "$vars_candidate" ]; then
-              OVMF_VARS="$vars_candidate"
-              break
-            fi
+          for vars_candidate in /usr/share/OVMF/OVMF_VARS.fd /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/ovmf/OVMF_VARS.fd ; do
+            [ -f "$vars_candidate" ] && { OVMF_VARS="$vars_candidate"; break; }
           done
-
-          # If split files not found, try extracting from the combined blob
           if [ -z "$OVMF_CODE" ] && [ -f /usr/share/ovmf/OVMF.fd ]; then
-            echo "  Split OVMF not found; using combined blob as CODE..."
             OVMF_CODE="/usr/share/ovmf/OVMF.fd"
-            # Generate a blank VARS file (256 KB is standard for OVMF)
             dd if=/dev/zero of=/tmp/win11vm/OVMF_VARS.fd bs=1K count=256 2>/dev/null
-            echo "  Generated blank NVRAM (256 KB)"
           fi
-
           if [ -z "$OVMF_CODE" ]; then
-            echo "❌ FATAL: Cannot find any OVMF firmware files!"
-            echo "   Searched: /usr/share/OVMF/, /usr/share/edk2/ovmf/, /usr/share/qemu/"
-            echo "   Listing available firmware files:"
-            find /usr/share -iname "*OVMF*" -o -iname "*ovmf*" 2>/dev/null | head -20
-            exit 1
+            echo "FATAL: Cannot find OVMF firmware files"; exit 1
           fi
+          if [ -n "$OVMF_VARS" ] && [ ! -f /tmp/win11vm/OVMF_VARS.fd ]; then cp "$OVMF_VARS" /tmp/win11vm/OVMF_VARS.fd; fi
 
-          # Create a WRITABLE copy of OVMF_VARS.fd (never modify the system template)
-          if [ -n "$OVMF_VARS" ] && [ ! -f /tmp/win11vm/OVMF_VARS.fd ]; then
-            cp "$OVMF_VARS" /tmp/win11vm/OVMF_VARS.fd
-            echo "  ✅ NVRAM initialized from $OVMF_VARS"
-          fi
-
-          echo "  OVMF CODE: $OVMF_CODE"
-          echo "  OVMF VARS: /tmp/win11vm/OVMF_VARS.fd"
-          ls -la "$OVMF_CODE" /tmp/win11vm/OVMF_VARS.fd
-
-          # ──────────────────────────────────────────────────────────────────
-          #  Build QEMU command
-          # ──────────────────────────────────────────────────────────────────
+          mkdir -p /tmp/win11vm/tpmstate
+          swtpm socket --tpmstate dir=/tmp/win11vm/tpmstate --ctrl type=unixio,path=/tmp/win11vm/swtpm-sock --tpm2 --log level=0 &
+          for _ in $(seq 1 20); do [ -S /tmp/win11vm/swtpm-sock ] && break; sleep 0.5; done
 
           QEMU_CMD=(
             qemu-system-x86_64
@@ -1175,322 +318,82 @@ jobs:
             -smp 2
             -cpu qemu64,+sse4.2,+popcnt
             -machine q35,accel=${ACCEL}
-
-            # FIX #1: UEFI via pflash (persistent NVRAM)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=/tmp/win11vm/OVMF_VARS.fd
-
-            # FIX #4: TPM 2.0 (tpm-crb for Win11)
             -chardev socket,id=chrtpm,path=/tmp/win11vm/swtpm-sock
             -tpmdev emulator,id=tpm0,chardev=chrtpm
             -device tpm-crb,tpmdev=tpm0
-
-            # FIX #2: Default interface = AHCI/SATA on q35 (not VirtIO)
-            # Added format=raw to CD-ROM to prevent QEMU format probing
             -drive file=/tmp/win11vm/disk.qcow2,format=qcow2
             -drive file=/tmp/win11vm/win11.iso,media=cdrom,format=raw
             -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy
-
-            # FIX #3: DVD boots first; NVRAM takes over after install
             -boot order=d
-
-            # Network (user-mode with port forwarding)
             -netdev user,id=net0,hostfwd=tcp::3389-:3389,hostfwd=tcp::8080-:8080
             -device virtio-net-pci,netdev=net0
-
-            # VNC display (noVNC will serve this in the browser on port 6080)
             -vnc :0
             -vga std
-
-            # Misc
             -name "Win11-AtlasOS"
             -daemonize
           )
-
-          # ── Start software TPM ──
-          mkdir -p /tmp/win11vm/tpmstate
-          swtpm socket \
-            --tpmstate dir=/tmp/win11vm/tpmstate \
-            --ctrl type=unixio,path=/tmp/win11vm/swtpm-sock \
-            --tpm2 \
-            --log level=0 &
-          sleep 2
-
-          # ── Launch VM ──
-          echo "  Starting QEMU..."
-          echo "  Command: ${QEMU_CMD[*]}"
           "${QEMU_CMD[@]}" 2>&1 || {
-            echo "⚠️  Primary QEMU launch failed. Retrying with simplified config..."
-
-            # Fallback: minimal config, same critical fixes
-            qemu-system-x86_64 \
-              -m 4096 -smp 2 \
-              -cpu qemu64,+sse4.2,+popcnt \
-              -machine q35,accel=${ACCEL} \
-              -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE} \
-              -drive if=pflash,format=raw,file=/tmp/win11vm/OVMF_VARS.fd \
-              -drive file=/tmp/win11vm/disk.qcow2,format=qcow2 \
-              -drive file=/tmp/win11vm/win11.iso,media=cdrom,format=raw \
-              -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy \
-              -boot order=d \
-              -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
-              -device e1000,netdev=net0 \
-              -vnc :0 \
-              -daemonize
+            qemu-system-x86_64 -m 4096 -smp 2 -cpu qemu64,+sse4.2,+popcnt -machine q35,accel=${ACCEL} -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE} -drive if=pflash,format=raw,file=/tmp/win11vm/OVMF_VARS.fd -drive file=/tmp/win11vm/disk.qcow2,format=qcow2 -drive file=/tmp/win11vm/win11.iso,media=cdrom,format=raw -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy -boot order=d -netdev user,id=net0,hostfwd=tcp::3389-:3389 -device e1000,netdev=net0 -vnc :0 -daemonize
           }
 
-          echo "✅ QEMU VM launched"
-          echo "  Waiting for Windows to install (this takes time without KVM)..."
-          
-          # Verify VNC is listening
-          sleep 3
-          if nc -z localhost 5900 2>/dev/null; then
-            echo "✅ VNC server listening on port 5900"
-          else
-            echo "⚠️  VNC not yet listening on 5900 (may take a moment)"
-          fi
-
-          # Verify NVRAM file is being written (confirms pflash persistence)
-          if [ -f /tmp/win11vm/OVMF_VARS.fd ]; then
-            VARS_SIZE=$(stat -c%s /tmp/win11vm/OVMF_VARS.fd 2>/dev/null)
-            echo "  NVRAM file size: ${VARS_SIZE} bytes (should be 256KB or 512KB)"
-          fi
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 6 — Wait for RDP to become available
-      # ──────────────────────────────────────────────────────────────────────
       - name: "⏳ Wait for Windows RDP (up to 90 minutes)"
         run: |
-          echo "── Polling for RDP on localhost:3389 ──"
-          echo "  (Windows installation + OOBE can take a while, especially in TCG mode)"
-
-          MAX_WAIT=5400   # 90 minutes
+          MAX_WAIT=5400
           ELAPSED=0
           INTERVAL=30
-
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             if nc -z localhost 3389 2>/dev/null; then
-              echo ""
               echo "✅ RDP is available on localhost:3389!"
               break
             fi
-            MINS=$((ELAPSED / 60))
-            SECS=$((ELAPSED % 60))
-            printf "\r  Waiting... %dm %ds elapsed" $MINS $SECS
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
 
-          if ! nc -z localhost 3389 2>/dev/null; then
-            echo ""
-            echo "⚠️  RDP not available after 90 minutes."
-            echo "  The VM may still be installing. Continuing anyway..."
-          fi
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 7 — Start tunnels and print connection info
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🌐 Start noVNC Web Desktop + Tunnels & Display Connection Info"
         run: |
           USERNAME="${{ github.event.inputs.rdp_user }}"
           PASSWORD="${{ github.event.inputs.rdp_password }}"
-
-          echo ""
-          echo "════════════════════════════════════════════════════════════"
-          echo "  🔑 CONNECTION INFORMATION"
-          echo "════════════════════════════════════════════════════════════"
-
-          # ── Start bore tunnel for RDP (native client fallback) ──
-          echo "── Starting bore TCP tunnel (RDP fallback) ──"
           bore local 3389 --to bore.pub > /tmp/bore_rdp.log 2>&1 &
-          BORE_PID=$!
           sleep 8
-
-          # Parse bore output
           BORE_OUTPUT=$(cat /tmp/bore_rdp.log 2>/dev/null)
-          echo "  Bore: $BORE_OUTPUT"
           RDP_ADDR="UNKNOWN"
           if echo "$BORE_OUTPUT" | grep -oP 'bore\.pub:\K\d+' > /tmp/bore_port; then
-            BORE_PORT=$(cat /tmp/bore_port)
-            RDP_ADDR="bore.pub:${BORE_PORT}"
-          elif echo "$BORE_OUTPUT" | grep -oP '\d+\.\d+\.\d+\.\d+:\d+' > /tmp/bore_addr; then
-            RDP_ADDR=$(cat /tmp/bore_addr)
+            RDP_ADDR="bore.pub:$(cat /tmp/bore_port)"
           fi
-
-          # ── Start noVNC (web-based VNC client — Windows desktop in browser!) ──
-          echo "── Starting noVNC web desktop (port 6080 → VNC 5900) ──"
-
-          # Verify VNC is listening first
-          if nc -z localhost 5900 2>/dev/null; then
-            echo "  ✅ VNC server confirmed on port 5900"
-          else
-            echo "  ⚠️  VNC not yet on 5900, starting noVNC anyway..."
-          fi
-
-          # Launch noVNC via websockify
-          # --vnc localhost:5900  : connect to QEMU's VNC server
-          # --listen 6080         : serve web client on port 6080
-          # --web /tmp/novnc      : serve noVNC's HTML/JS files
-          /tmp/novnc/utils/novnc_proxy \
-            --vnc localhost:5900 \
-            --listen 6080 \
-            --web /tmp/novnc \
-            > /tmp/novnc.log 2>&1 &
-          NOVNC_PID=$!
-          sleep 3
-
-          # Verify noVNC is running
-          if nc -z localhost 6080 2>/dev/null; then
-            echo "  ✅ noVNC web server running on port 6080"
-          else
-            echo "  ⚠️  noVNC may not be ready yet (check /tmp/novnc.log)"
-            cat /tmp/novnc.log 2>/dev/null | tail -5
-          fi
-
-          # ── Start cloudflared tunnel pointing to noVNC ──
-          echo "── Starting cloudflared tunnel → noVNC (port 6080) ──"
+          /tmp/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 6080 --web /tmp/novnc > /tmp/novnc.log 2>&1 &
           cloudflared tunnel --url http://localhost:6080 > /tmp/cf_tunnel.log 2>&1 &
-          CF_PID=$!
           sleep 10
-
-          # Extract the public URL
           HTTP_URL="N/A"
           if grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf_tunnel.log 2>/dev/null > /tmp/cf_url; then
             HTTP_URL=$(cat /tmp/cf_url)
-            # Build the direct-to-desktop URL (auto-connects to VNC)
-            WEB_DESKTOP_URL="${HTTP_URL}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=3000"
-            WEB_LANDING_URL="${HTTP_URL}/"
-          else
-            WEB_DESKTOP_URL="N/A"
-            WEB_LANDING_URL="N/A"
-            echo "  ⚠️  Could not extract cloudflared URL"
-            cat /tmp/cf_tunnel.log 2>/dev/null | tail -10
           fi
+          echo "Web Desktop: ${HTTP_URL}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=3000"
+          echo "RDP Address: $RDP_ADDR"
+          echo "Username: $USERNAME"
+          echo "Password: $PASSWORD"
 
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║        🖥️  WINDOWS 11 WEB DESKTOP — OPEN IN BROWSER       ║"
-          echo "╠══════════════════════════════════════════════════════════════╣"
-          echo "║                                                              ║"
-          echo "║  🌐 Web Desktop (open this in your browser!):                ║"
-          echo "║                                                              ║"
-          echo "║  $WEB_DESKTOP_URL"
-          echo "║                                                              ║"
-          echo "║  Landing page:                                               ║"
-          echo "║  $WEB_LANDING_URL"
-          echo "║                                                              ║"
-          echo "╠══════════════════════════════════════════════════════════════╣"
-          echo "║                                                              ║"
-          echo "║  🖧 RDP Fallback (native client):                            ║"
-          echo "║    Address:  $RDP_ADDR"
-          echo "║    Username: $USERNAME"
-          echo "║    Password: $PASSWORD"
-          echo "║                                                              ║"
-          echo "╠══════════════════════════════════════════════════════════════╣"
-          echo "║  📋 Web Desktop Tips:                                        ║"
-          echo "║    • The link above opens Windows 11 directly in browser     ║"
-          echo "║    • Use Ctrl+Alt+Del via the noVNC sidebar (left edge)      ║"
-          echo "║    • Press F11 for fullscreen for best experience            ║"
-          echo "║    • AtlasOS tools are at C:\\AtlasOS\\ on the VM desktop    ║"
-          echo "║    • If screen is black, Windows is still installing         ║"
-          echo "║                                                              ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-
-          # Save URLs to a file for reference
-          cat > /tmp/connection_info.txt << EOF
-          ══════════════════════════════════════════
-            CONNECTION DETAILS
-          ══════════════════════════════════════════
-          Web Desktop : $WEB_DESKTOP_URL
-          Landing     : $WEB_LANDING_URL
-          RDP Address : $RDP_ADDR
-          Username    : $USERNAME
-          Password    : $PASSWORD
-          ══════════════════════════════════════════
-          EOF
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 8 — Keep-alive loop
-      # ──────────────────────────────────────────────────────────────────────
       - name: "⏱️ Keep-Alive (${{ github.event.inputs.duration_hours }}h)"
         run: |
           DURATION_HOURS="${{ github.event.inputs.duration_hours }}"
           TOTAL_SECONDS=$((DURATION_HOURS * 3600))
           ELAPSED=0
           INTERVAL=60
-
-          echo "═══════════════════════════════════════════════════"
-          echo "  ⏱️  Keep-Alive: ${DURATION_HOURS}h (${TOTAL_SECONDS}s)"
-          echo "  Monitoring: QEMU VM + noVNC + bore + cloudflared"
-          echo "═══════════════════════════════════════════════════"
-
           while [ $ELAPSED -lt $TOTAL_SECONDS ]; do
-            REMAINING=$((TOTAL_SECONDS - ELAPSED))
-            HOURS_LEFT=$((REMAINING / 3600))
-            MINS_LEFT=$(( (REMAINING % 3600) / 60 ))
-
-            # Check all services
-            VM_STATUS="✓"
-            pgrep -x qemu-system-x86 > /dev/null 2>&1 || VM_STATUS="✗"
-
-            VNC_STATUS="✓"
-            nc -z localhost 5900 2>/dev/null || VNC_STATUS="✗"
-
-            NOVNC_STATUS="✓"
-            nc -z localhost 6080 2>/dev/null || NOVNC_STATUS="✗"
-
-            BORE_STATUS="✓"
-            pgrep -f "bore local" > /dev/null 2>&1 || BORE_STATUS="✗"
-
-            CF_STATUS="✓"
-            pgrep -f cloudflared > /dev/null 2>&1 || CF_STATUS="✗"
-
-            TIMESTAMP=$(date +%H:%M:%S)
-            echo "[$TIMESTAMP] ⏳ ${HOURS_LEFT}h${MINS_LEFT}m left | VM:$VM_STATUS VNC:$VNC_STATUS noVNC:$NOVNC_STATUS bore:$BORE_STATUS cf:$CF_STATUS"
-
-            # Restart noVNC if dead
-            if ! nc -z localhost 6080 2>/dev/null; then
-              echo "  ⚠️ noVNC died — restarting..."
-              /tmp/novnc/utils/novnc_proxy \
-                --vnc localhost:5900 \
-                --listen 6080 \
-                --web /tmp/novnc \
-                > /tmp/novnc.log 2>&1 &
-            fi
-
-            # Restart bore if dead
-            if ! pgrep -f "bore local" > /dev/null 2>&1; then
-              echo "  ⚠️ bore died — restarting (new address!)"
-              bore local 3389 --to bore.pub > /tmp/bore_rdp.log 2>&1 &
-            fi
-
-            # Restart cloudflared if dead
-            if ! pgrep -f cloudflared > /dev/null 2>&1; then
-              echo "  ⚠️ cloudflared died — restarting (new URL!)"
-              cloudflared tunnel --url http://localhost:6080 > /tmp/cf_tunnel.log 2>&1 &
-            fi
-
+            pgrep -x qemu-system-x86 > /dev/null 2>&1 || true
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
 
-          echo ""
-          echo "🏁 Session complete. VM will be destroyed."
-
-      # ──────────────────────────────────────────────────────────────────────
-      #  STEP 9 — Cleanup
-      # ──────────────────────────────────────────────────────────────────────
       - name: "🧹 Cleanup"
         if: always()
         run: |
-          echo "── Shutting down all services ──"
           pkill -f qemu-system-x86 || true
           pkill -f swtpm || true
           pkill -f bore || true
           pkill -f cloudflared || true
           pkill -f novnc_proxy || true
           pkill -f websockify || true
-          pkill -f "python3.*launch" || true
           rm -rf /tmp/win11vm /tmp/novnc /tmp/bore
-          echo "✅ Cleanup complete"

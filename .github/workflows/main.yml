@@ -818,10 +818,11 @@ jobs:
           ISO_SIZE=$(stat -c%s /tmp/win11vm/win11.iso 2>/dev/null || stat -f%z /tmp/win11vm/win11.iso 2>/dev/null)
           ISO_SIZE_MB=$((ISO_SIZE / 1024 / 1024))
 
-          if [ "$ISO_SIZE" -lt 1000000000 ]; then
-            echo "⚠️  ISO file is only ${ISO_SIZE_MB}MB — this seems too small."
-            echo "   A valid Windows 11 ISO should be ~5000-6000 MB."
-            echo "   The download URL may have expired or returned an error page."
+          # Check 1: File size should be in expected range for Windows 11 (4-8 GB)
+          if [ "$ISO_SIZE" -lt 4000000000 ]; then
+            echo "❌ ISO file is only ${ISO_SIZE_MB}MB — too small for Windows 11."
+            echo "   A valid Windows 11 ISO should be 4000-8000 MB."
+            echo "   The download may be truncated or the URL may have expired."
             echo ""
             echo "   First 500 bytes of file:"
             head -c 500 /tmp/win11vm/win11.iso | strings | head -10
@@ -830,6 +831,25 @@ jobs:
             exit 1
           fi
 
+          # Check 2: Verify ISO 9660 signature at offset 0x8001 (32769)
+          # Valid ISO 9660 images have "CD001" at this offset
+          ISO_SIGNATURE=$(dd if=/tmp/win11vm/win11.iso bs=1 skip=32769 count=5 2>/dev/null)
+          if [ "$ISO_SIGNATURE" != "CD001" ]; then
+            echo "❌ ISO file does not have valid ISO 9660 signature."
+            echo "   Expected 'CD001' at offset 0x8001, got: '$ISO_SIGNATURE'"
+            echo "   File size: ${ISO_SIZE_MB} MB"
+            echo ""
+            echo "   This file is not a valid ISO 9660 image."
+            echo "   The download may be corrupted or the URL returned an error page."
+            echo ""
+            echo "   First 200 bytes of file:"
+            head -c 200 /tmp/win11vm/win11.iso | strings | head -10
+            echo ""
+            echo "   ❌ Please provide a fresh, valid Microsoft ISO URL."
+            exit 1
+          fi
+
+          echo "  ✅ ISO 9660 signature verified (CD001)"
           echo ""
           ls -lh /tmp/win11vm/
           echo "✅ Windows 11 ISO ready (${ISO_SIZE_MB} MB)"
@@ -1053,7 +1073,7 @@ jobs:
       # ──────────────────────────────────────────────────────────────────────
       #  STEP 5 — Launch QEMU Windows 11 VM
       #
-      #  Evidence-based fixes (verified from YAML, not assumptions):
+      #  Changes from the original broken config:
       #    1. pflash (OVMF_CODE + OVMF_VARS) replaces -bios
       #       → -bios loads OVMF as ROM; NVRAM volatile; boot entries lost on reboot
       #    2. Removed if=virtio from system disk
@@ -1061,9 +1081,11 @@ jobs:
       #       → Windows 11 has no built-in viostor driver
       #       → autounattend.xml has no <DriverPaths> element
       #       → Result: disk invisible to Setup, nothing installed, reboot→Shell
-      #    3. Added -boot order=d
+      #    3. Added format=raw to CD-ROM drive
+      #       → Prevents QEMU format probing on the ISO file
+      #    4. Added -boot order=d
       #       → Ensures first boot from DVD; NVRAM takes over after install
-      #    4. tpm-crb replaces tpm-tis
+      #    5. tpm-crb replaces tpm-tis
       #       → Microsoft-recommended TPM interface for Windows 11
       # ──────────────────────────────────────────────────────────────────────
       - name: "🖥️ Boot Windows 11 VM"
@@ -1145,12 +1167,6 @@ jobs:
 
           # ──────────────────────────────────────────────────────────────────
           #  Build QEMU command
-          #
-          #  Only changes from the original broken config:
-          #    1. pflash (OVMF_CODE + OVMF_VARS) instead of -bios → persistent NVRAM
-          #    2. Removed if=virtio from disk → Windows can see disk (AHCI native)
-          #    3. Added -boot order=d → DVD boots first
-          #    4. tpm-crb instead of tpm-tis → Windows 11 TPM compatibility
           # ──────────────────────────────────────────────────────────────────
 
           QEMU_CMD=(
@@ -1170,8 +1186,9 @@ jobs:
             -device tpm-crb,tpmdev=tpm0
 
             # FIX #2: Default interface = AHCI/SATA on q35 (not VirtIO)
+            # Added format=raw to CD-ROM to prevent QEMU format probing
             -drive file=/tmp/win11vm/disk.qcow2,format=qcow2
-            -drive file=/tmp/win11vm/win11.iso,media=cdrom
+            -drive file=/tmp/win11vm/win11.iso,media=cdrom,format=raw
             -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy
 
             # FIX #3: DVD boots first; NVRAM takes over after install
@@ -1213,7 +1230,7 @@ jobs:
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE} \
               -drive if=pflash,format=raw,file=/tmp/win11vm/OVMF_VARS.fd \
               -drive file=/tmp/win11vm/disk.qcow2,format=qcow2 \
-              -drive file=/tmp/win11vm/win11.iso,media=cdrom \
+              -drive file=/tmp/win11vm/win11.iso,media=cdrom,format=raw \
               -drive file=/tmp/win11vm/autounattend.img,format=raw,if=floppy \
               -boot order=d \
               -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
